@@ -93,6 +93,9 @@ class ActiveFeatures:
 
         return start_i
 
+    def get_reconstructed_resid_pre(self, layer: int):
+        return self.get_vectors_before_comp("attn", layer).sum(dim=0)
+
     def get_reconstructed_resid_post(self, layer: int):
         return self.get_vectors_before_comp("attn", layer + 1).sum(dim=0)
 
