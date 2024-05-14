@@ -1,4 +1,5 @@
 # %%
+
 %load_ext autoreload
 %autoreload 2
 
@@ -8,6 +9,7 @@
 from circuit_lens import CircuitLens
 
 # %%
+
 lens = CircuitLens("Mary and Jeff went to the store, and Mary gave an apple to Jeff")
 
 # %%
@@ -23,13 +25,18 @@ test_compare_resid_post(lens)
 test_compare_mlp_feature_activations(lens)
 test_correct_comp_contributions_for_mlp_feature(lens)
 test_correct_z_feature_head_seq_decomposition(lens)
+test_compare_v(lens)
 
 # %%
 from test_circuit_lens import *
-
+test_correct_value_contribs_for_z_feature(lens, layers=[6])
 
 # %%
 torch.tensor([1, 4,3, 34,23]).argmax()
+
+# %%
+lens.model.W_V[0].shape
+
 
 
 # %%

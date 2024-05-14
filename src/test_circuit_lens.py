@@ -375,3 +375,142 @@ def test_correct_z_feature_head_seq_decomposition(
             )
 
         assert all_close
+
+
+def get_layer_norm_decomp(clens, resid, ln_type, layer, seq_index):
+    device, dtype = resid.device, resid.dtype
+
+    mlp_scale = clens.cache["scale", layer, ln_type][0, seq_index]
+
+    ev = torch.ones_like(resid, dtype=dtype, device=device) * resid.mean()
+
+    return (resid - ev) / mlp_scale, ev, mlp_scale, ev / mlp_scale
+
+
+def test_compare_v(clens: CircuitLens, layers=[0, 3, 5, 11], seq_index=-3):
+    seq_index = clens.process_seq_index(seq_index)
+
+    for layer in layers:
+        resid_pre = clens.get_active_features(
+            seq_index, cache=False
+        ).get_reconstructed_resid_pre(layer)
+
+        attn_input = get_layer_norm_decomp(clens, resid_pre, "ln1", layer, seq_index)[0]
+
+        recon_v = (
+            einops.einsum(
+                attn_input,
+                clens.model.W_V[layer],
+                "d_model, n_head d_model d_head -> n_head d_head",
+            )
+            + clens.model.b_V[layer]
+        )
+
+        true_v = clens.cache["v", layer][0, seq_index]
+
+        all_close = torch.allclose(recon_v, true_v, atol=ATOL)
+
+        if not all_close:
+            print(
+                f"Layer: {layer} Seq: {seq_index}",
+                (recon_v - true_v).norm().item(),
+            )
+
+        assert all_close
+
+
+def test_correct_value_contribs_for_z_feature(
+    clens: CircuitLens, layers=[0, 3, 5, 11], seq_index=-3
+):
+    """
+    Assumes `test_correct_z_feature_head_seq_decomposition` passes
+    """
+    seq_index = clens.process_seq_index(seq_index)
+
+    for layer in layers:
+        layer_z = einops.rearrange(
+            clens.cache["z", layer][0, seq_index],
+            "n_heads d_head -> (n_heads d_head)",
+        )
+        z_sae = clens.z_saes[layer]
+        z_acts = z_sae(layer_z)[2]
+
+        feature_i = z_acts.argmax()
+
+        feature_acts = clens.get_head_seq_activations_for_z_feature(
+            layer, seq_index, feature_i
+        )
+
+        amax = feature_acts.argmax()
+
+        source_i = int(amax % clens.n_tokens)
+        head_i = amax // clens.n_tokens
+
+        feature_acts_reshaped = einops.rearrange(
+            feature_acts,
+            "(n_head seq) -> n_head seq",
+            n_head=clens.model.cfg.n_heads,
+        )
+
+        feature_value = feature_acts_reshaped[head_i, source_i]
+
+        vectors = clens.get_active_features(
+            source_i, cache=False
+        ).get_vectors_before_comp("attn", layer)
+
+        resid_pre = vectors.sum(dim=0)
+
+        _, _, mlp_scale, scaled_ev = get_layer_norm_decomp(
+            clens, resid_pre, "ln1", layer, source_i
+        )
+
+        scaled_vectors = vectors / mlp_scale
+
+        better_w_enc = einops.rearrange(
+            z_sae.W_enc, "(n_head d_head) feature -> n_head d_head feature", n_head=12
+        )[head_i, :, feature_i]
+
+        print(
+            "zhapezzzz",
+            (
+                einops.einsum(
+                    scaled_ev,
+                    clens.model.W_V[layer, head_i],
+                    "d_model, d_model d_head -> d_head",
+                )
+                - clens.model.b_V[layer]
+            ).shape,
+            better_w_enc.shape,
+        )
+
+        target_value = feature_value + einops.einsum(
+            +einops.einsum(
+                scaled_ev,
+                clens.model.W_V[layer, head_i],
+                "d_model, d_model d_head -> d_head",
+            )
+            - clens.model.b_V[layer, head_i],
+            better_w_enc,
+            "d_head, d_head -> ",
+        )
+
+        all_vector_contribs = einops.einsum(
+            scaled_vectors,
+            clens.model.W_V[layer, head_i],
+            "comp d_model, d_model d_head -> comp d_head",
+        )
+
+        all_vector_contribs = einops.einsum(
+            all_vector_contribs, better_w_enc, "comp d_head, d_head -> comp"
+        ).sum()
+
+        all_close = torch.allclose(target_value, all_vector_contribs, atol=ATOL)
+
+        if not all_close:
+            print(
+                f"Layer: {layer} Seq: {seq_index}",
+                target_value.item(),
+                all_vector_contribs.item(),
+            )
+
+        assert all_close
