@@ -10,6 +10,7 @@ from typing import List, Dict, TypedDict, Any, Union, Tuple, Optional
 from tqdm import trange
 from plotly_utils import imshow
 from pprint import pprint
+from transformer_lens.utils import get_act_name, to_numpy
 
 from dataclasses import dataclass
 
@@ -348,13 +349,13 @@ class ComponentLens:
 model_encoder_cache: Optional[Tuple[HookedTransformer, Any, Any]] = None
 
 
-def get_model_encoders():
+def get_model_encoders(device):
     global model_encoder_cache
 
     if model_encoder_cache is not None:
         return model_encoder_cache
 
-    model = HookedTransformer.from_pretrained("gpt2-small")
+    model = HookedTransformer.from_pretrained("gpt2-small", device=device)
 
     z_saes = [ZSAE.load_zsae_for_layer(i) for i in trange(model.cfg.n_layers)]
 
@@ -369,7 +370,8 @@ def get_model_encoders():
 
 class CircuitLens:
     def __init__(self, prompt):
-        (model, z_saes, mlp_transcoders) = get_model_encoders()
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        (model, z_saes, mlp_transcoders) = get_model_encoders(self.device)
 
         self.z_saes = z_saes
         self.mlp_transcoders = mlp_transcoders
@@ -756,6 +758,7 @@ class CircuitLens:
             visualize=visualize,
             k=k,
         )
+    
 
     def get_head_seq_activations_for_z_feature(
         self, layer: int, seq_index: int, feature: int, visualize=True, k=10
@@ -992,3 +995,135 @@ class CircuitLens:
             visualize=visualize,
             k=k,
         )
+    
+    def get_transcoder_ixg(self, transcoder, layer, seq_index, feature_vector, is_transcoder_post_ln=True, return_feature_activs=True):
+        """
+        Pull back the contributions from the transcoder's output to the inputs.
+        """
+        # Perform the matrix multiplication with the decoder weights
+        pulledback_feature = transcoder.W_dec @ feature_vector
+        
+        # Determine the correct activation name based on whether layer normalization is applied
+        act_name = ("normalized", layer, "ln2") if is_transcoder_post_ln else ("resid_mid", layer)
+        
+        # Retrieve the activations from the cache
+        feature_activs = transcoder(self.cache[act_name])[1][0, seq_index]
+        
+        # Multiply pulledback_feature by the feature activations
+        pulledback_feature *= feature_activs
+        
+        # Return the pulledback_feature and feature_activs
+        if not return_feature_activs:
+            return pulledback_feature
+        else:
+            return pulledback_feature, feature_activs
+        
+
+    def get_ln_constant(self, vector, layer, token, is_ln2=False, recip=False):
+        x_act_name = ("resid_mid", layer) if is_ln2 else ("resid_pre", layer)
+        y_act_name = ("normalized", layer, "ln2") if is_ln2 else ("normalized", layer, "ln1")
+        
+        x = self.cache[x_act_name][0, token]
+        y = self.cache[y_act_name][0, token]
+        
+        if torch.dot(vector, x) == 0:
+            return torch.tensor(0.0, device=vector.device)
+        return torch.dot(vector, y) / torch.dot(vector, x) if not recip else torch.dot(vector, x) / torch.dot(vector, y)
+
+    
+    def get_attn_head_contribs(self, layer: int, seq_index: int, feature_vector: torch.Tensor):
+        z_sae = self.z_saes[layer]
+        layer_z = einops.rearrange(
+            self.cache["z", layer][0, seq_index],
+            "n_heads d_head -> (n_heads d_head)"
+        )
+        
+        # Get z_acts similar to how it's done in your current code
+        _, z_recon, z_acts, _, _ = z_sae(layer_z)
+        
+        # Compute z_error and z_bias
+        z_error = layer_z - z_recon
+        z_bias = z_sae.b_dec
+
+        # Stack z_error and z_bias, then rearrange
+        z_error_bias = torch.stack([z_error, z_bias])
+        z_error_bias = einops.rearrange(
+            z_error_bias,
+            "v (n_head d_head) -> v n_head d_head",
+            n_head=self.model.cfg.n_heads,
+        )
+        z_error_bias = einops.einsum(
+            z_error_bias,
+            self.model.W_O[layer],
+            "v n_head d_head, n_head d_head d_model -> v d_model",
+        )
+        
+        z_winner_count = z_acts.nonzero().numel()
+        z_values, z_max_features = z_acts.topk(k=z_winner_count)
+        
+        z_contributions = z_sae.W_dec[z_max_features.squeeze(0)] * z_values.squeeze(0).unsqueeze(-1)
+        z_contributions = einops.rearrange(
+            z_contributions,
+            "winners (n_head d_head) -> winners n_head d_head",
+            n_head=self.model.cfg.n_heads,
+        )
+        z_residual_vectors = einops.einsum(
+            z_contributions,
+            self.model.W_O[layer],
+            "winners n_head d_head, n_head d_head d_model -> winners d_model",
+        )
+        return z_residual_vectors
+
+    def get_transcoder_contribs(self, layer: int, seq_index: int, feature_vector: torch.Tensor, k=5):
+        transcoder = self.mlp_transcoders[layer]
+        is_transcoder_post_ln = 'ln2' in transcoder.cfg.hook_point
+        act_name = ("normalized", layer, "ln2") if is_transcoder_post_ln else ("resid_mid", layer)
+        
+        transcoder_out = transcoder(self.cache[act_name])[0][0, seq_index]
+        mlp_out = self.model.blocks[layer].mlp(self.cache[act_name])[0, seq_index]
+        
+        # Reshape feature_vector to match mlp_out and transcoder_out for dot product
+        if feature_vector.dim() == 2:  # When feature_vector is 2D (e.g., attention heads)
+            feature_vector = feature_vector.view(-1)
+        
+        error = torch.dot(feature_vector, mlp_out - transcoder_out) / torch.dot(feature_vector, mlp_out)
+        
+        pulledback_feature, feature_activs = self.get_transcoder_ixg(transcoder, layer, seq_index, feature_vector)
+        top_contribs, top_indices = torch.topk(pulledback_feature, k=k)
+
+        top_contribs_list = []
+        for contrib, index in zip(top_contribs, top_indices):
+            vector = transcoder.W_enc[:, index]
+            vector = vector * (transcoder.W_dec @ feature_vector)[index]
+            if is_transcoder_post_ln:
+                vector *= self.get_ln_constant(vector, layer, seq_index)
+
+            top_contribs_list.append((vector, layer, seq_index, index.item(), contrib.item()))
+        return top_contribs_list
+
+    def get_top_contribs(self, feature_vector: torch.Tensor, layer: int, seq_index: int, k=5):
+        all_mlp_contribs = []
+        for cur_layer in range(layer + 1):
+            all_mlp_contribs += self.get_transcoder_contribs(cur_layer, seq_index, feature_vector, k=k)
+
+        all_attn_contribs = []
+        for cur_layer in range(layer + 1):
+            attn_contribs = self.get_attn_head_contribs(cur_layer, seq_index, feature_vector)
+            top_attn_contribs_flattened, top_attn_contrib_indices_flattened = torch.topk(attn_contribs.flatten(), k=min(k, len(attn_contribs)))
+            top_attn_contrib_indices = torch.unravel_index(top_attn_contrib_indices_flattened, attn_contribs.shape)
+
+            print(f"Top attn contribs flattened: {top_attn_contribs_flattened}")
+            print(f"Top attn contrib indices: {top_attn_contrib_indices}")
+
+            for contrib, (winner, head, src_token) in zip(top_attn_contribs_flattened, zip(*top_attn_contrib_indices)):
+                vector = self.model.OV[cur_layer, head] @ feature_vector
+                attn_pattern = self.cache["pattern", cur_layer]
+                vector *= attn_pattern[0, head, seq_index, src_token]
+                vector *= self.get_ln_constant(vector, cur_layer, src_token)
+
+                all_attn_contribs.append((vector, cur_layer, src_token, head, contrib.item()))
+
+        all_contribs = all_mlp_contribs + all_attn_contribs
+        all_contrib_scores = torch.tensor([x[4] for x in all_contribs])
+        _, top_contrib_indices = torch.topk(all_contrib_scores, k=min(k, len(all_contrib_scores)))
+        return [all_contribs[i.item()] for i in top_contrib_indices]
