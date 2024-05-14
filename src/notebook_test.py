@@ -22,10 +22,10 @@ test_compare_transcoder_out(lens)
 test_compare_resid_post(lens)
 test_compare_mlp_feature_activations(lens)
 test_correct_comp_contributions_for_mlp_feature(lens)
+test_correct_z_feature_head_seq_decomposition(lens)
 
 # %%
 from test_circuit_lens import *
-
 
 
 # %%
