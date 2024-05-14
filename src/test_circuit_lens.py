@@ -337,4 +337,41 @@ def test_correct_z_feature_head_seq_decomposition(
     seq_index = clens.process_seq_index(seq_index)
 
     for layer in layers:
-        pass
+        z_sae = clens.z_saes[layer]
+
+        layer_z = einops.rearrange(
+            clens.cache["z", layer][0, seq_index],
+            "n_heads d_head -> (n_heads d_head)",
+        )
+
+        z_acts = clens.z_saes[layer](layer_z)[2]
+
+        feature_i = z_acts.argmax()
+        feature_val = z_acts[feature_i]
+
+        feature_acts = clens.get_head_seq_activations_for_z_feature(
+            layer, seq_index, feature_i
+        )
+
+        total_contrib = feature_acts.sum()
+
+        target_value = (
+            feature_val
+            - z_sae.b_enc[feature_i]
+            + einops.einsum(
+                z_sae.b_dec,
+                z_sae.W_enc[:, feature_i],
+                "d_model, d_model -> ",
+            )
+        )
+
+        all_close = torch.allclose(target_value, total_contrib, atol=ATOL)
+
+        if not all_close:
+            print(
+                f"Layer: {layer} Seq: {seq_index}",
+                target_value.item(),
+                total_contrib.item(),
+            )
+
+        assert all_close

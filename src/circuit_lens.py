@@ -309,7 +309,7 @@ class ComponentLens:
                 self.run_data["token_id"], self.run_data["seq_index"] ** kwargs
             )
         elif self.run_type == "z_feature_head_seq":
-            return self.web.get_head_seq_activations_for_z_feature(
+            return self.web.get_head_seq_lens_for_z_feature(
                 self.run_data["layer"],
                 self.run_data["seq_index"],
                 self.run_data["feature"],
@@ -632,14 +632,12 @@ class CircuitLens:
         )
 
     def get_head_seq_activations_for_z_feature(
-        self, layer: int, seq_index: int, feature: int, visualize=True, k=10
+        self, layer: int, seq_index: int, feature: int
     ):
         seq_index = self.process_seq_index(seq_index)
         v = self.cache["v", layer]
-        pattern = self.cache["pattern", 9]
+        pattern = self.cache["pattern", layer]
         encoder = self.z_saes[layer]
-
-        seq_index = self.process_seq_index(seq_index)
 
         pre_z = einops.einsum(
             v,
@@ -654,7 +652,17 @@ class CircuitLens:
         feature_act = einops.einsum(
             pre_z, better_w_enc, "seq n_head d_head, n_head d_head -> n_head seq"
         )
-        feature_act = einops.rearrange(feature_act, "n_head seq -> (n_head seq)")
+
+        return einops.rearrange(feature_act, "n_head seq -> (n_head seq)")
+
+    def get_head_seq_lens_for_z_feature(
+        self, layer: int, seq_index: int, feature: int, visualize=True, k=10
+    ):
+        feature_act = self.get_head_seq_activations_for_z_feature(
+            layer, seq_index, feature
+        )
+
+        feature_act /= feature_act.sum()
 
         values, indices = feature_act.topk(k=k)
 
@@ -702,7 +710,7 @@ class CircuitLens:
                     f"Head {head} "
                     + f"| Source: {self.model.tokenizer.decode([self.tokens[0, source]])}::{source} "
                     + f"| Destination: {self.model.tokenizer.decode([self.tokens[0, dest]])}::{dest} "
-                    + f"| Value: {value:.3g}"
+                    + f"| Value: {value * 100:.3g}%"
                     for (head, source, dest, value) in vis_list
                 ]
             )
