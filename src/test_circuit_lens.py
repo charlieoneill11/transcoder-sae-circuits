@@ -1,0 +1,340 @@
+import pytest
+import torch
+import einops
+
+from circuit_lens import CircuitLens
+
+ATOL = 1e-5
+
+
+@pytest.fixture(scope="module")
+def clens() -> CircuitLens:
+    return CircuitLens(
+        "Mary and Jeff went to the store, and Mary gave an apple to Jeff"
+    )
+
+
+def test_compare_max_attn_features(
+    lens: CircuitLens, layers=[0, 3, 5, 11], seq_index=-3
+):
+    for layer in layers:
+        seq_index = lens.process_seq_index(seq_index)
+        active_features = lens.get_active_features(seq_index, cache=False)
+
+        z_sae = lens.z_saes[layer]
+
+        layer_z = einops.rearrange(
+            lens.cache["z", layer][0, seq_index],
+            "n_heads d_head -> (n_heads d_head)",
+        )
+        _, _, z_acts, _, _ = lens.z_saes[layer](layer_z)
+
+        z_winner_count = z_acts.nonzero().numel()
+
+        z_values, z_max_features = z_acts.topk(k=z_winner_count)
+
+        z_contributions = z_sae.W_dec[z_max_features.squeeze(0)] * z_values.squeeze(
+            0
+        ).unsqueeze(-1)
+
+        z_contributions = einops.rearrange(
+            z_contributions,
+            "winners (n_head d_head) -> winners n_head d_head",
+            n_head=lens.model.cfg.n_heads,
+        )
+        z_residual_vectors = einops.einsum(
+            z_contributions,
+            lens.model.W_O[layer],
+            "winners n_head d_head, n_head d_head d_model -> winners d_model",
+        )
+
+        max_features_from_active_features = active_features.get_attn_feature_vectors(
+            layer
+        )
+
+        all_close = torch.allclose(
+            z_residual_vectors, max_features_from_active_features, atol=ATOL
+        )
+
+        if not all_close:
+            print(
+                f"Layer: {layer} Seq: {seq_index}",
+                (z_residual_vectors - max_features_from_active_features).norm().item(),
+            )
+
+        assert all_close
+
+
+def test_compare_sae_out(lens: CircuitLens, layers=[0, 3, 5, 11], seq_index=-3):
+    seq_index = lens.process_seq_index(seq_index)
+
+    for layer in layers:
+        layer_z = einops.rearrange(
+            lens.cache["z", layer][0, seq_index],
+            "n_heads d_head -> (n_heads d_head)",
+        )
+
+        test_sae_out = lens.get_active_features(
+            seq_index, cache=False
+        ).get_sae_out_reconstruction(layer)
+
+        _, z_recon, _, _, _ = lens.z_saes[layer](layer_z)
+
+        z_recon = einops.rearrange(
+            z_recon,
+            "(n_head d_head) -> n_head d_head",
+            n_head=lens.model.cfg.n_heads,
+        )
+        z_recon = einops.einsum(
+            z_recon,
+            lens.model.W_O[layer],
+            "n_head d_head, n_head d_head d_model -> d_model",
+        )
+
+        all_close = torch.allclose(z_recon, test_sae_out, atol=ATOL)
+
+        if not all_close:
+            print(
+                f"Layer: {layer} Seq: {seq_index}",
+                (z_recon - test_sae_out).norm().item(),
+            )
+
+        assert all_close
+
+
+def test_compare_max_mlp_features(
+    lens: CircuitLens, layers=[0, 3, 5, 11], seq_index=-3
+):
+    seq_index = lens.process_seq_index(seq_index)
+
+    for layer in layers:
+        mlp_transcoder = lens.mlp_transcoders[layer]
+        mlp_input = lens.cache["normalized", layer, "ln2"][:, seq_index]
+
+        _, mlp_acts, *_ = mlp_transcoder(mlp_input)
+
+        mlp_acts = mlp_acts[0]
+
+        mlp_winner_count = mlp_acts.nonzero().numel()
+
+        mlp_values, mlp_max_features = mlp_acts.topk(k=mlp_winner_count)
+
+        mlp_residual_vectors = mlp_transcoder.W_dec[
+            mlp_max_features.squeeze(0)
+        ] * mlp_values.squeeze(0).unsqueeze(-1)
+
+        test_vectors = lens.get_active_features(
+            seq_index, cache=False
+        ).get_mlp_feature_vectors(layer)
+
+        all_close = torch.allclose(mlp_residual_vectors, test_vectors, atol=ATOL)
+
+        if not all_close:
+            print(
+                f"Layer: {layer} Seq: {seq_index}",
+                (mlp_residual_vectors - test_vectors).norm().item(),
+            )
+
+        assert all_close
+
+
+def test_compare_attn_out(clens: CircuitLens, layers=[0, 3, 5, 11], seq_index=-3):
+    seq_index = clens.process_seq_index(seq_index)
+
+    for layer in layers:
+        active_features = clens.get_active_features(seq_index, cache=False)
+        feature_recon = active_features.get_reconstructed_attn_out(layer)
+
+        attn_out = clens.cache["attn_out", layer][0, seq_index]
+
+        all_close = torch.allclose(feature_recon, attn_out, atol=ATOL)
+
+        if not all_close:
+            print(
+                f"Layer: {layer} Seq: {seq_index}",
+                (feature_recon - attn_out).norm().item(),
+            )
+
+        assert all_close
+
+
+def test_compare_mlp_out(clens: CircuitLens, layers=[0, 3, 5, 11], seq_index=-3):
+    seq_index = clens.process_seq_index(seq_index)
+
+    for layer in layers:
+        active_features = clens.get_active_features(seq_index, cache=False)
+        feature_recon = active_features.get_reconstructed_mlp_out(layer)
+
+        mlp_out = clens.cache["mlp_out", layer][0, seq_index]
+
+        all_close = torch.allclose(feature_recon, mlp_out, atol=ATOL)
+
+        if not all_close:
+            print(
+                f"Layer: {layer} Seq: {seq_index}",
+                (feature_recon - mlp_out).norm().item(),
+            )
+
+        assert all_close
+
+
+def test_compare_transcoder_out(clens: CircuitLens, layers=[0, 3, 5, 11], seq_index=-3):
+    seq_index = clens.process_seq_index(seq_index)
+
+    for layer in layers:
+        test_transcoder_out = clens.get_active_features(
+            seq_index, cache=False
+        ).get_transcoder_reconstruction(layer)
+
+        mlp_input = clens.cache["normalized", layer, "ln2"]
+        out = clens.mlp_transcoders[layer](mlp_input)[0][0, seq_index]
+        all_close = torch.allclose(out, test_transcoder_out, atol=ATOL)
+
+        if not all_close:
+            print(
+                f"Layer: {layer} Seq: {seq_index}",
+                (out - test_transcoder_out).norm().item(),
+            )
+
+        assert all_close
+
+
+def test_compare_resid_post(clens: CircuitLens, layers=[0, 3, 5, 11], seq_index=-3):
+    seq_index = clens.process_seq_index(seq_index)
+
+    for layer in layers:
+        actual_resid_post = clens.cache["resid_post", layer][0, seq_index]
+        test_resid_post = clens.get_active_features(
+            seq_index, cache=False
+        ).get_reconstructed_resid_post(layer)
+
+        all_close = torch.allclose(actual_resid_post, test_resid_post, atol=ATOL)
+
+        if not all_close:
+            print(
+                f"Layer: {layer} Seq: {seq_index}",
+                (actual_resid_post - test_resid_post).norm().item(),
+            )
+
+        assert all_close
+
+
+def test_compare_mlp_feature_activations(
+    clens: CircuitLens, layers=[0, 3, 5, 11], seq_index=-3
+):
+    seq_index = clens.process_seq_index(seq_index)
+
+    for layer in layers:
+        mlp_input = clens.cache["normalized", layer, "ln2"][:, seq_index]
+        mlp_transcoder = clens.mlp_transcoders[layer]
+
+        mlp_acts = mlp_transcoder(mlp_input)[1][0]
+
+        feature_i = mlp_acts.argmax()
+        feature_val = mlp_acts[feature_i]
+
+        resid_mid = clens.get_active_features(
+            seq_index, cache=False
+        ).get_reconstructed_resid_mid(layer)
+
+        device, dtype = resid_mid.device, resid_mid.dtype
+
+        mlp_scale = clens.cache["scale", layer, "ln2"][0, seq_index]
+
+        scaled_ev = (
+            torch.ones_like(resid_mid, dtype=dtype, device=device) * resid_mid.mean()
+        ) / mlp_scale
+
+        scaled_resid = resid_mid / mlp_scale
+
+        reconstructed_normalized = scaled_resid - scaled_ev
+
+        value = (
+            einops.einsum(
+                reconstructed_normalized - mlp_transcoder.b_dec,
+                mlp_transcoder.W_enc[:, feature_i],
+                "d_model, d_model -> ",
+            )
+            + mlp_transcoder.b_enc[feature_i]
+        )
+
+        all_close = torch.allclose(value, feature_val, atol=ATOL)
+
+        if not all_close:
+            print(
+                f"Layer: {layer} Seq: {seq_index}",
+                (value - feature_val).norm().item(),
+            )
+
+        assert all_close
+
+
+def test_correct_comp_contributions_for_mlp_feature(
+    clens: CircuitLens, layers=[0, 3, 5, 11], seq_index=-3
+):
+    seq_index = clens.process_seq_index(seq_index)
+
+    for layer in layers:
+        mlp_input = clens.cache["normalized", layer, "ln2"][:, seq_index]
+        mlp_transcoder = clens.mlp_transcoders[layer]
+
+        mlp_acts = mlp_transcoder(mlp_input)[1][0]
+
+        feature_i = mlp_acts.argmax()
+        feature_val = mlp_acts[feature_i]
+
+        vectors = clens.get_active_features(seq_index).get_vectors_before_comp(
+            "mlp", layer
+        )
+
+        mlp_scale = clens.cache["scale", layer, "ln2"][0, seq_index]
+
+        scaled_vectors = vectors / mlp_scale
+
+        scaled_contributions = einops.einsum(
+            scaled_vectors,
+            mlp_transcoder.W_enc[:, feature_i],
+            "comp d_model, d_model -> comp",
+        )
+
+        contrib_sum = scaled_contributions.sum()
+
+        resid_mid = clens.get_active_features(
+            seq_index, cache=False
+        ).get_reconstructed_resid_mid(layer)
+
+        device, dtype = resid_mid.device, resid_mid.dtype
+
+        scaled_ev = (
+            torch.ones_like(resid_mid, dtype=dtype, device=device) * resid_mid.mean()
+        ) / mlp_scale
+
+        test_contrib_sum = (
+            feature_val
+            - mlp_transcoder.b_enc[feature_i]
+            + einops.einsum(
+                scaled_ev + mlp_transcoder.b_dec,
+                mlp_transcoder.W_enc[:, feature_i],
+                "d_model, d_model -> ",
+            )
+        )
+
+        all_close = torch.allclose(contrib_sum, test_contrib_sum, atol=ATOL)
+
+        if not all_close:
+            print(
+                f"Layer: {layer} Seq: {seq_index}",
+                contrib_sum.item(),
+                test_contrib_sum.item(),
+            )
+
+        assert all_close
+
+
+def test_correct_z_feature_head_seq_decomposition(
+    clens: CircuitLens, layers=[0, 3, 5, 11], seq_index=-3
+):
+    seq_index = clens.process_seq_index(seq_index)
+
+    for layer in layers:
+        pass
