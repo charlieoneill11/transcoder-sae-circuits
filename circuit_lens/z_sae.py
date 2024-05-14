@@ -55,6 +55,8 @@ class ZSAE(nn.Module):
         self.to(cfg["device"])
 
     def forward(self, x, per_token=False):
+        # Move x to cfg device
+        x = x.to(self.device)
         x_cent = x - self.b_dec
         acts = F.relu(x_cent @ self.W_enc + self.b_enc)  # [batch_size, d_hidden]
         x_reconstruct = acts @ self.W_dec + self.b_dec  # [batch_size, act_size]
@@ -75,6 +77,7 @@ class ZSAE(nn.Module):
         """
 
         cfg = utils.download_file_from_hf(hf_repo, f"{version}_cfg.json")
+        cfg["device"] = "cuda" if torch.cuda.is_available() else "cpu"
         self = cls(cfg=cfg)
         self.load_state_dict(utils.download_file_from_hf(hf_repo, f"{version}.pt", force_is_torch=True))  # type: ignore
         return self

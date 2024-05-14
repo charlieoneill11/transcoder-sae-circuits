@@ -108,6 +108,9 @@ class SparseTranscoder(HookedRootModule):
     def forward(self, x, dead_neuron_mask=None, mse_target=None):
         # move x to correct dtype
         x = x.to(self.dtype)
+        # Move x to cfg device
+        x = x.to(self.device)
+
         sae_in = self.hook_sae_in(
             x - self.b_dec
         )  # Remove encoder bias as per Anthropic
@@ -620,6 +623,12 @@ class SparseTranscoder(HookedRootModule):
             raise ValueError(
                 "The loaded state dictionary must contain 'cfg' and 'state_dict' keys"
             )
+        
+        # Automatically change cfg device
+        if torch.cuda.is_available():
+            state_dict["cfg"].device = "cuda"
+        else:
+            state_dict["cfg"].device = "cpu"
 
         # Create an instance of the class using the loaded configuration
         instance = cls(cfg=state_dict["cfg"])
