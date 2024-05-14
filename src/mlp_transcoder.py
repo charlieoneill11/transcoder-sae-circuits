@@ -623,7 +623,7 @@ class SparseTranscoder(HookedRootModule):
             raise ValueError(
                 "The loaded state dictionary must contain 'cfg' and 'state_dict' keys"
             )
-        
+
         # Automatically change cfg device
         if torch.cuda.is_available():
             state_dict["cfg"].device = "cuda"

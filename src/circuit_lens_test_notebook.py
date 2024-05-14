@@ -14,6 +14,7 @@ from torch import tensor
 # %%
 circuit_lens = CircuitLens("Mary and Jeff went to the store, and Mary gave an apple to Jeff")
 
+
 # %%
 unembed_children = circuit_lens.get_unembed_lens_for_prompt_token(-2)
 
