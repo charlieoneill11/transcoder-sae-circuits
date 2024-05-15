@@ -473,9 +473,8 @@ class CircuitLens:
 
             z_values, z_max_features = z_acts.topk(k=z_winner_count)
 
-            z_contributions = z_sae.W_dec[z_max_features.squeeze(0)] * z_values.squeeze(
-                0
-            ).unsqueeze(-1)
+            z_contributions = z_sae.W_dec[z_max_features] * z_values.unsqueeze(-1)
+
             z_contributions = einops.rearrange(
                 z_contributions,
                 "winners (n_head d_head) -> winners n_head d_head",

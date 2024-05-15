@@ -446,6 +446,8 @@ def test_correct_value_contribs_for_z_feature(
         source_i = int(amax % clens.n_tokens)
         head_i = amax // clens.n_tokens
 
+        pattern_val = clens.cache["pattern", layer][0, head_i, seq_index, source_i]
+
         feature_acts_reshaped = einops.rearrange(
             feature_acts,
             "(n_head seq) -> n_head seq",
@@ -470,17 +472,10 @@ def test_correct_value_contribs_for_z_feature(
             z_sae.W_enc, "(n_head d_head) feature -> n_head d_head feature", n_head=12
         )[head_i, :, feature_i]
 
-        print(
-            "zhapezzzz",
-            (
-                einops.einsum(
-                    scaled_ev,
-                    clens.model.W_V[layer, head_i],
-                    "d_model, d_model d_head -> d_head",
-                )
-                - clens.model.b_V[layer]
-            ).shape,
-            better_w_enc.shape,
+        all_vector_contribs = einops.einsum(
+            scaled_vectors,
+            clens.model.W_V[layer, head_i],
+            "comp d_model, d_model d_head -> comp d_head",
         )
 
         target_value = feature_value + einops.einsum(
@@ -494,15 +489,12 @@ def test_correct_value_contribs_for_z_feature(
             "d_head, d_head -> ",
         )
 
-        all_vector_contribs = einops.einsum(
-            scaled_vectors,
-            clens.model.W_V[layer, head_i],
-            "comp d_model, d_model d_head -> comp d_head",
+        all_vector_contribs = (
+            einops.einsum(
+                all_vector_contribs, better_w_enc, "comp d_head, d_head -> comp"
+            ).sum()
+            * pattern_val
         )
-
-        all_vector_contribs = einops.einsum(
-            all_vector_contribs, better_w_enc, "comp d_head, d_head -> comp"
-        ).sum()
 
         all_close = torch.allclose(target_value, all_vector_contribs, atol=ATOL)
 
@@ -511,6 +503,38 @@ def test_correct_value_contribs_for_z_feature(
                 f"Layer: {layer} Seq: {seq_index}",
                 target_value.item(),
                 all_vector_contribs.item(),
+            )
+
+        assert all_close
+
+
+def test_compare_q(clens: CircuitLens, layers=[0, 3, 5, 11], seq_index=-3):
+    seq_index = clens.process_seq_index(seq_index)
+
+    for layer in layers:
+        resid_pre = clens.get_active_features(
+            seq_index, cache=False
+        ).get_reconstructed_resid_pre(layer)
+
+        attn_input = get_layer_norm_decomp(clens, resid_pre, "ln1", layer, seq_index)[0]
+
+        recon_q = (
+            einops.einsum(
+                attn_input,
+                clens.model.W_Q[layer],
+                "d_model, n_head d_model d_head -> n_head d_head",
+            )
+            + clens.model.b_Q[layer]
+        )
+
+        true_q = clens.cache["q", layer][0, seq_index]
+
+        all_close = torch.allclose(recon_q, true_q, atol=ATOL)
+
+        if not all_close:
+            print(
+                f"Layer: {layer} Seq: {seq_index}",
+                (recon_q - true_q).norm().item(),
             )
 
         assert all_close
