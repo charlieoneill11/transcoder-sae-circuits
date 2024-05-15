@@ -138,6 +138,8 @@ class ActiveFeatures:
         return self.vectors[mlp_i : mlp_i + num_comps].sum(dim=0)
 
     def get_top_k_features(self, activations: Float[Tensor, "comp"], k=10):
+        k = min(k, activations.size(0))
+
         values, indices = activations.topk(k=k)
 
         features = []
@@ -614,7 +616,7 @@ class CircuitLens:
         return self.get_next_lens_runs(
             active_features=active_features,
             activations=activations,
-            title=f"Unembed Lens for token '{self.model.tokenizer.decode([token_i])}' at '{self.model.tokenizer.decode([token_i])}",
+            title=f"Unembed Lens for token '{self.model.tokenizer.decode([token_i])}'/{token_i}",
             seq_index=seq_index,
             visualize=visualize,
             k=k,
@@ -732,7 +734,7 @@ class CircuitLens:
             active_features,
             activation,
             seq_index,
-            title=f"MLP Lens for Feature {feature} at '{self.get_str_token_at_seq(seq_index)}' :: {seq_index}",
+            title=f"MLP Lens for Feature {feature} at '{self.get_str_token_at_seq(seq_index)}'/{seq_index}",
             visualize=visualize,
             k=k,
         )
@@ -792,7 +794,7 @@ class CircuitLens:
             active_features,
             activation,
             seq_index,
-            title=f"V Lens | Layer {layer} | Head {head} | Feature {feature} at  '{self.get_str_token_at_seq(seq_index)}'::{seq_index}",
+            title=f"V Lens | Layer {layer} | Head {head} | Feature {feature} at  '{self.get_str_token_at_seq(seq_index)}'/{seq_index}",
             visualize=visualize,
             k=k,
         )
@@ -846,7 +848,7 @@ class CircuitLens:
             active_features,
             activation,
             destination_index,
-            title=f"Q Lens | Layer {layer} | Head {head} | '{self.get_str_token_at_seq(source_index)}'::{source_index} -> '{self.get_str_token_at_seq(destination_index)}'::{destination_index}",
+            title=f"Q Lens | Layer {layer} | Head {head} | '{self.get_str_token_at_seq(source_index)}'/{source_index} -> '{self.get_str_token_at_seq(destination_index)}'/{destination_index}",
             visualize=visualize,
             k=k,
         )
@@ -898,8 +900,8 @@ class CircuitLens:
         return self.get_next_lens_runs(
             active_features,
             activation,
-            destination_index,
-            title=f"K Lens | Layer {layer} | Head {head} | '{self.get_str_token_at_seq(source_index)}'::{source_index} -> '{self.get_str_token_at_seq(destination_index)}'::{destination_index}",
+            source_index,
+            title=f"K Lens | Layer {layer} | Head {head} | '{self.get_str_token_at_seq(source_index)}'/{source_index} -> '{self.get_str_token_at_seq(destination_index)}'/{destination_index}",
             visualize=visualize,
             k=k,
         )
