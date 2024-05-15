@@ -378,9 +378,12 @@ def get_model_encoders(device):
 
 
 class CircuitLens:
-    def __init__(self, prompt):
+    def __init__(self, prompt, model=None, z_saes=None, mlp_transcoders=None):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        (model, z_saes, mlp_transcoders) = get_model_encoders(self.device)
+
+        # This just means we don't have to keep loading them
+        if model is None or z_saes is None or mlp_transcoders is None:
+            (model, z_saes, mlp_transcoders) = get_model_encoders(self.device)
 
         self.z_saes = z_saes
         self.mlp_transcoders = mlp_transcoders
@@ -931,51 +934,80 @@ class CircuitLens:
             else torch.dot(vector, x) / torch.dot(vector, y)
         )
 
-    def get_attn_head_contribs(
-        self, layer: int, seq_index: int, feature_vector: torch.Tensor
-    ):
-        z_sae = self.z_saes[layer]
-        layer_z = einops.rearrange(
-            self.cache["z", layer][0, seq_index], "n_heads d_head -> (n_heads d_head)"
+    # def get_attn_head_contribs(
+    #     self, layer: int, seq_index: int, feature_vector: torch.Tensor
+    # ):
+    #     z_sae = self.z_saes[layer]
+    #     layer_z = einops.rearrange(
+    #         self.cache["z", layer][0, seq_index], "n_heads d_head -> (n_heads d_head)"
+    #     )
+
+    #     # Get z_acts similar to how it's done in your current code
+    #     _, z_recon, z_acts, _, _ = z_sae(layer_z)
+
+    #     # Compute z_error and z_bias
+    #     z_error = layer_z - z_recon
+    #     z_bias = z_sae.b_dec
+
+    #     # Stack z_error and z_bias, then rearrange
+    #     z_error_bias = torch.stack([z_error, z_bias])
+    #     z_error_bias = einops.rearrange(
+    #         z_error_bias,
+    #         "v (n_head d_head) -> v n_head d_head",
+    #         n_head=self.model.cfg.n_heads,
+    #     )
+    #     z_error_bias = einops.einsum(
+    #         z_error_bias,
+    #         self.model.W_O[layer],
+    #         "v n_head d_head, n_head d_head d_model -> v d_model",
+    #     )
+
+    #     z_winner_count = z_acts.nonzero().numel()
+    #     z_values, z_max_features = z_acts.topk(k=z_winner_count)
+
+    #     z_contributions = z_sae.W_dec[z_max_features.squeeze(0)] * z_values.squeeze(
+    #         0
+    #     ).unsqueeze(-1)
+    #     z_contributions = einops.rearrange(
+    #         z_contributions,
+    #         "winners (n_head d_head) -> winners n_head d_head",
+    #         n_head=self.model.cfg.n_heads,
+    #     )
+    #     z_residual_vectors = einops.einsum(
+    #         z_contributions,
+    #         self.model.W_O[layer],
+    #         "winners n_head d_head, n_head d_head d_model -> winners d_model",
+    #     )
+    #     return z_residual_vectors
+
+    @torch.no_grad()
+    def get_attn_head_contribs(self, layer: int, feature_vector: torch.Tensor):
+        split_vals = self.cache["z", layer]
+        attn_pattern = self.cache["pattern", layer]
+        print(f"Split vals shape: {split_vals.shape}")
+        print(f"Attn pattern shape: {attn_pattern.shape}")
+
+        # batch head dst src, batch src head d_head -> batch head dst src d_head
+        weighted_vals = torch.einsum(
+            'b h d s, b s h f -> b h d s f',
+            attn_pattern, split_vals,
         )
 
-        # Get z_acts similar to how it's done in your current code
-        _, z_recon, z_acts, _, _ = z_sae(layer_z)
-
-        # Compute z_error and z_bias
-        z_error = layer_z - z_recon
-        z_bias = z_sae.b_dec
-
-        # Stack z_error and z_bias, then rearrange
-        z_error_bias = torch.stack([z_error, z_bias])
-        z_error_bias = einops.rearrange(
-            z_error_bias,
-            "v (n_head d_head) -> v n_head d_head",
-            n_head=self.model.cfg.n_heads,
-        )
-        z_error_bias = einops.einsum(
-            z_error_bias,
-            self.model.W_O[layer],
-            "v n_head d_head, n_head d_head d_model -> v d_model",
+        # batch head dst src d_head, head d_head d_model -> batch head dst src d_model
+        weighted_outs = torch.einsum(
+            'b h d s f, h f m -> b h d s m',
+            weighted_vals, self.model.W_O[layer],
         )
 
-        z_winner_count = z_acts.nonzero().numel()
-        z_values, z_max_features = z_acts.topk(k=z_winner_count)
+        # batch head dst src d_model, d_model -> batch head dst src
+        contribs = torch.einsum(
+            'b h d s m, m -> b h d s',
+            weighted_outs, feature_vector,
+        )
 
-        z_contributions = z_sae.W_dec[z_max_features.squeeze(0)] * z_values.squeeze(
-            0
-        ).unsqueeze(-1)
-        z_contributions = einops.rearrange(
-            z_contributions,
-            "winners (n_head d_head) -> winners n_head d_head",
-            n_head=self.model.cfg.n_heads,
-        )
-        z_residual_vectors = einops.einsum(
-            z_contributions,
-            self.model.W_O[layer],
-            "winners n_head d_head, n_head d_head d_model -> winners d_model",
-        )
-        return z_residual_vectors
+        return contribs
+
+
 
     def get_transcoder_contribs(
         self, layer: int, seq_index: int, feature_vector: torch.Tensor, k=5
@@ -1027,32 +1059,43 @@ class CircuitLens:
                 cur_layer, seq_index, feature_vector, k=k
             )
 
+        # Attention contributions
         all_attn_contribs = []
         for cur_layer in range(layer + 1):
             attn_contribs = self.get_attn_head_contribs(
-                cur_layer, seq_index, feature_vector
+                cur_layer, feature_vector
             )
+            print(f"Attn contribs shape: {attn_contribs.shape}")
             top_attn_contribs_flattened, top_attn_contrib_indices_flattened = (
                 torch.topk(attn_contribs.flatten(), k=min(k, len(attn_contribs)))
             )
-            top_attn_contrib_indices = torch.unravel_index(
-                top_attn_contrib_indices_flattened, attn_contribs.shape
-            )
 
-            print(f"Top attn contribs flattened: {top_attn_contribs_flattened}")
-            print(f"Top attn contrib indices: {top_attn_contrib_indices}")
+        # all_attn_contribs = []
+        # for cur_layer in range(layer + 1):
+        #     attn_contribs = self.get_attn_head_contribs(
+        #         cur_layer, seq_index, feature_vector
+        #     )
+        #     top_attn_contribs_flattened, top_attn_contrib_indices_flattened = (
+        #         torch.topk(attn_contribs.flatten(), k=min(k, len(attn_contribs)))
+        #     )
+        #     top_attn_contrib_indices = torch.unravel_index(
+        #         top_attn_contrib_indices_flattened, attn_contribs.shape
+        #     )
 
-            for contrib, (winner, head, src_token) in zip(
-                top_attn_contribs_flattened, zip(*top_attn_contrib_indices)
-            ):
-                vector = self.model.OV[cur_layer, head] @ feature_vector
-                attn_pattern = self.cache["pattern", cur_layer]
-                vector *= attn_pattern[0, head, seq_index, src_token]
-                vector *= self.get_ln_constant(vector, cur_layer, src_token)
+        #     print(f"Top attn contribs flattened: {top_attn_contribs_flattened}")
+        #     print(f"Top attn contrib indices: {top_attn_contrib_indices}")
 
-                all_attn_contribs.append(
-                    (vector, cur_layer, src_token, head, contrib.item())
-                )
+        #     for contrib, (winner, head, src_token) in zip(
+        #         top_attn_contribs_flattened, zip(*top_attn_contrib_indices)
+        #     ):
+        #         vector = self.model.OV[cur_layer, head] @ feature_vector
+        #         attn_pattern = self.cache["pattern", cur_layer]
+        #         vector *= attn_pattern[0, head, seq_index, src_token]
+        #         vector *= self.get_ln_constant(vector, cur_layer, src_token)
+
+        #         all_attn_contribs.append(
+        #             (vector, cur_layer, src_token, head, contrib.item())
+        #         )
 
         all_contribs = all_mlp_contribs + all_attn_contribs
         all_contrib_scores = torch.tensor([x[4] for x in all_contribs])
