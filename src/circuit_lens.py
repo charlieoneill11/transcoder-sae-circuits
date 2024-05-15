@@ -14,8 +14,6 @@ from transformer_lens.utils import get_act_name, to_numpy
 
 from dataclasses import dataclass
 
-ATOL = 1e-4
-
 
 class LayerKey(TypedDict):
     mlp: int
@@ -156,7 +154,7 @@ class ActiveFeatures:
 
             for l, key in enumerate(self.keys):
                 if i == start_i:
-                    features.append(("O Bias", l, self.features[i], v))
+                    features.append(("b_O", l, self.features[i], v))
                     break
                 start_i += 1
 
@@ -171,7 +169,7 @@ class ActiveFeatures:
                 start_i += 1
 
                 if i < start_i + key["attn"]:
-                    features.append(("attn", l, self.features[i], v))
+                    features.append(("Attn", l, self.features[i], v))
                     break
 
                 start_i += key["attn"]
@@ -187,7 +185,7 @@ class ActiveFeatures:
                 start_i += 1
 
                 if i < start_i + key["mlp"]:
-                    features.append(("mlp", l, self.features[i], v))
+                    features.append(("MLP", l, self.features[i], v))
                     break
 
                 start_i += key["mlp"]
@@ -206,9 +204,9 @@ class ActiveFeatures:
         lens_runs = []
 
         for feature in features:
-            if feature[0] == "attn":
+            if feature[0] == "Attn":
                 run_type = "z_feature_head_seq"
-            elif feature[0] == "mlp":
+            elif feature[0] == "MLP":
                 run_type = "mlp"
             else:
                 run_type = feature[0]
@@ -231,7 +229,7 @@ class ActiveFeatures:
         features = self.get_top_k_features(activations, k=k)
 
         return [
-            f"{kind.capitalize()} {layer} | Feature: {feature} | Value: {value:.3g}"
+            f"{kind} | Layer: {layer} | Feature: {feature} | Contribution: {value*100:.3g}%"
             for kind, layer, feature, value in features
         ]
 
@@ -399,19 +397,10 @@ class CircuitLens:
     def n_tokens(self):
         return self.tokens.size(1)
 
-    def test_compare_final_resid_post(self, seq_index: int):
-        seq_index = self.process_seq_index(seq_index)
+    def normalize_activations(self, activations):
+        # activations -= activations.min()
 
-        cumulative_sum = self.get_active_features(seq_index, cache=False).vectors.sum(
-            dim=0
-        )
-
-        resid_post = self.cache["resid_post", self.model.cfg.n_layers - 1][0, seq_index]
-
-        return (
-            torch.allclose(cumulative_sum, resid_post, atol=ATOL),
-            (cumulative_sum - resid_post).norm(),
-        )
+        return activations / activations.sum()
 
     def get_active_features(self, seq_index: int, cache=True) -> ActiveFeatures:
         seq_index = self.process_seq_index(seq_index)
@@ -548,7 +537,7 @@ class CircuitLens:
 
     def get_next_lens_runs(
         self,
-        active_features,
+        active_features: ActiveFeatures,
         activations,
         seq_index: int,
         title: str,
@@ -613,16 +602,14 @@ class CircuitLens:
         seq_index = self.process_seq_index(seq_index)
         active_features = self.get_active_features(seq_index)
 
-        activations = (
-            einops.einsum(
-                active_features.vectors,
-                self.model.W_U[:, token_i],
-                "comp d_model, d_model -> comp",
-            )
-            / self.cache["ln_final.hook_scale"][0, seq_index]
+        activations = einops.einsum(
+            active_features.vectors,
+            self.model.W_U[:, token_i],
+            "comp d_model, d_model -> comp",
         )
 
-        activations /= self.logits[0, seq_index][token_i]
+        # activations /= activations.sum()
+        activations = self.normalize_activations(activations)
 
         return self.get_next_lens_runs(
             active_features=active_features,
@@ -664,7 +651,8 @@ class CircuitLens:
             layer, seq_index, feature
         )
 
-        feature_act /= feature_act.sum()
+        # feature_act /= feature_act.sum()
+        feature_act = self.normalize_activations(feature_act)
 
         values, indices = feature_act.topk(k=k)
 
@@ -712,7 +700,7 @@ class CircuitLens:
                     f"Head {head} "
                     + f"| Source: {self.model.tokenizer.decode([self.tokens[0, source]])}::{source} "
                     + f"| Destination: {self.model.tokenizer.decode([self.tokens[0, dest]])}::{dest} "
-                    + f"| Value: {value * 100:.3g}%"
+                    + f"| Contribution: {value * 100:.3g}%"
                     for (head, source, dest, value) in vis_list
                 ]
             )
@@ -738,7 +726,7 @@ class CircuitLens:
             vectors, transcoder.W_enc[:, feature], "comp d_model, d_model -> comp"
         )
 
-        activation /= activation.sum()
+        activation = self.normalize_activations(activation)
 
         return self.get_next_lens_runs(
             active_features,
@@ -753,14 +741,12 @@ class CircuitLens:
         seq_index = self.process_seq_index(seq_index)
         return self.model.tokenizer.decode([self.tokens[0, seq_index]])
 
-    def get_v_lens_at_seq(
+    def get_v_lens_activations(
         self,
         layer: int,
-        head: int,
+        head,
         seq_index: int,
         feature: int,
-        visualize=True,
-        k=None,
     ):
         seq_index = self.process_seq_index(seq_index)
         active_features = self.get_active_features(seq_index)
@@ -784,6 +770,24 @@ class CircuitLens:
             effective_v, effective_feature, "comp d_head, d_head -> comp"
         )
 
+        return activation
+
+    def get_v_lens_at_seq(
+        self,
+        layer: int,
+        head: int,
+        seq_index: int,
+        feature: int,
+        visualize=True,
+        k=None,
+    ):
+        seq_index = self.process_seq_index(seq_index)
+        active_features = self.get_active_features(seq_index)
+
+        activation = self.get_v_lens_activations(layer, head, seq_index, feature)
+
+        activation = self.normalize_activations(activation)
+
         return self.get_next_lens_runs(
             active_features,
             activation,
@@ -792,6 +796,31 @@ class CircuitLens:
             visualize=visualize,
             k=k,
         )
+
+    def get_q_lens_activations(
+        self,
+        layer: int,
+        head: int,
+        source_index,
+        destination_index,
+    ):
+        source_index = self.process_seq_index(source_index)
+        destination_index = self.process_seq_index(destination_index)
+
+        active_features = self.get_active_features(destination_index)
+
+        vectors = active_features.get_vectors_before_comp("attn", layer)
+
+        effective_k = self.cache["k", layer][0, source_index, head]
+
+        activation = einops.einsum(
+            vectors,
+            self.model.W_Q[layer, head],
+            effective_k,
+            "comp d_model, d_model d_head, d_head -> comp",
+        )
+
+        return activation
 
     def get_q_lens_on_head_seq(
         self,
@@ -807,27 +836,11 @@ class CircuitLens:
 
         active_features = self.get_active_features(destination_index)
 
-        vectors = active_features.get_vectors_before_comp("attn", layer)
-
-        effective_q = einops.einsum(
-            vectors,
-            self.model.W_Q[layer, head],
-            "comp d_model, d_model d_head -> comp d_head",
+        activation = self.get_q_lens_activations(
+            layer, head, source_index, destination_index
         )
 
-        effective_k = self.cache["k", layer][0, source_index, head]
-
-        bias_q = self.model.b_Q[layer, head]
-        real_q = self.cache["q", layer][0, destination_index, head]
-        bias_contrib = einops.einsum(bias_q, effective_k, "d_head, d_head -> ")
-        qk = einops.einsum(real_q, effective_k, "d_head, d_head -> ")
-        ln_scale = self.cache["scale", layer, "ln1"][0, destination_index]
-
-        print("qk ", qk, "bias", bias_contrib, "ln-scale", ln_scale)
-
-        activation = einops.einsum(
-            effective_q, effective_k, "comp d_head, d_head -> comp"
-        ) / (ln_scale * (qk - bias_contrib))
+        activation = self.normalize_activations(activation)
 
         return self.get_next_lens_runs(
             active_features,
@@ -838,6 +851,30 @@ class CircuitLens:
             k=k,
         )
 
+    def get_k_lens_activations(
+        self,
+        layer: int,
+        head: int,
+        source_index,
+        destination_index,
+    ):
+        source_index = self.process_seq_index(source_index)
+        destination_index = self.process_seq_index(destination_index)
+
+        active_features = self.get_active_features(source_index)
+
+        vectors = active_features.get_vectors_before_comp("attn", layer)
+        effective_q = self.cache["q", layer][0, destination_index, head]
+
+        activation = einops.einsum(
+            vectors,
+            self.model.W_K[layer, head],
+            effective_q,
+            "comp d_model, d_model d_head, d_head -> comp",
+        )
+
+        return activation
+
     def get_k_lens_on_head_seq(
         self,
         layer: int,
@@ -847,28 +884,16 @@ class CircuitLens:
         visualize=True,
         k=None,
     ):
+        source_index = self.process_seq_index(source_index)
+        destination_index = self.process_seq_index(destination_index)
+
         active_features = self.get_active_features(source_index)
 
-        vectors = active_features.get_vectors_before_comp("attn", layer)
-
-        effective_k = einops.einsum(
-            vectors,
-            self.model.W_K[layer, head],
-            "comp d_model, d_model d_head -> comp d_head",
+        activation = self.get_k_lens_activations(
+            layer, head, source_index, destination_index
         )
 
-        effective_q = self.cache["q", layer][0, destination_index, head]
-
-        bias_k = self.model.b_K[layer, head]
-        real_k = self.cache["k", layer][0, source_index, head]
-
-        bias_contrib = einops.einsum(bias_k, effective_q, "d_head, d_head -> ")
-        qk = einops.einsum(real_k, effective_q, "d_head, d_head -> ")
-        ln_scale = self.cache["scale", layer, "ln1"][0, source_index]
-
-        activation = einops.einsum(
-            effective_k, effective_q, "comp d_head, d_head -> comp"
-        ) / (ln_scale * (qk - bias_contrib))
+        activation = self.normalize_activations(activation)
 
         return self.get_next_lens_runs(
             active_features,
