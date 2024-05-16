@@ -1,5 +1,6 @@
-from dataclasses import dataclass, field
 from typing import Union, Optional, List, Dict
+from circuit_lens import CircuitLens, ComponentLens
+from dataclasses import dataclass, field
 
 @dataclass
 class Node:
@@ -45,6 +46,18 @@ class CircuitDiscoveryHeadNode:
                 head_type=head_type, visualize=False, k=self.k
             )
         return self._children_components[head_type]
+    
+CircuitDiscoveryNode = Union[CircuitDiscoveryRegularNode, CircuitDiscoveryHeadNode]
+
+
+def filter_children_nodes(children: List[ComponentLens]) -> List[ComponentLens]:
+    # Print run data of all children
+    for child in children:
+        print(f"Run data: {child.run_data}")
+    to_remove = ['error', 'bias']
+    errors_and_biases_removed = [c for c in children if not any([r in c.run_data['run_type'].lower() for r in to_remove])]
+    children_removed = [c for c in errors_and_biases_removed if c.run_data['layer'] != 0]
+    return children_removed
 
 
 class CircuitDiscovery:
