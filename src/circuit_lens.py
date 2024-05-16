@@ -260,6 +260,7 @@ class ActiveFeatures:
                         "layer": layer,
                         "seq_index": seq_index,
                         "feature": feature_i,
+                        "run_type": component,
                     },
                 )
             )
@@ -329,11 +330,14 @@ class ComponentLens:
 
     @classmethod
     def create_root_unembed_lens(cls, circuit_lens: "CircuitLens", seq_index):
+        token_id = circuit_lens.tokens[0, seq_index].item()
         return cls(
             circuit_lens=circuit_lens,
             component=CircuitComponent.UNEMBED_AT_TOKEN,
             run_data={
                 "seq_index": seq_index,
+                "token_id": token_id,
+                "run_type": CircuitComponent.UNEMBED_AT_TOKEN,
             },
         )
 
@@ -350,11 +354,12 @@ class ComponentLens:
             return f"Unembed at Token | Token: '{self.circuit_lens.model.tokenizer.decode([token_i])}' :: {token_i} | Seq Index: {seq_index}"
         elif self.component == CircuitComponent.Z_FEATURE:
             return f"Z Feature | Feature: {self.run_data['feature']} |Layer: {self.run_data['layer']} | Seq Index: {self.run_data['seq_index']}"
-        elif self.component == "head":
+        elif self.component == "attn_head":
             return f"Head | Layer: {self.run_data['layer']} | Head: {self.run_data['head']} | Source: {self.run_data['source_index']} | Destination: {self.run_data['destination_index']}"
-        elif self.component == "mlp":
+        elif self.component == "mlp_feature":
             return f"MLP Lens | Layer: {self.run_data['layer']} | Seq Index: {self.run_data['seq_index']} | Feature: {self.run_data['feature']}"
         else:
+            print(f"Unknown component {self.component}, run_data: {self.run_data}")
             return f"{self.component} | Layer: {self.run_data['layer']} | Seq Index: {self.run_data['seq_index']} | Feature: {self.run_data['feature']}"
 
     def __repr__(self):
@@ -363,44 +368,42 @@ class ComponentLens:
     @property
     def feature(self):
         return self.run_data.get("feature", -1)
-
-    # _cache = None
-    # _cache_k = None
-
-    # def __call__(self, head_type=None, **kwargs):
-    #     if self._cache is not None and (
-    #         "k" not in kwargs or self._cache_k == kwargs.get("k", 10)
-    #     ):
-    #         return self._cache
-
-    #     self._cache_k = kwargs.get("k", 10)
-    #     self._cache = self._call(head_type=head_type, **kwargs)
-
-    #     return self._cache
-
-    # def _call(self, head_type=None, **kwargs):
+    
 
     def __call__(self, head_type=None, **kwargs) -> List["ComponentLens"]:
+        print(f"Run data: {self.run_data}")  # debugging, remove later
+
+        if self.component in [CircuitComponent.UNEMBED, CircuitComponent.UNEMBED_AT_TOKEN] and "token_id" not in self.run_data:
+            raise ValueError(f"Missing 'token_id' in run_data for component type {self.component}")
+        
         if self.component == CircuitComponent.UNEMBED:
+            print(f"Calling unembed for token {self.run_data}")  # debugging, remove later
             return self.circuit_lens.get_unembed_lens(
                 self.run_data["token_id"], self.run_data["seq_index"], **kwargs
             )
+        
         elif self.component == CircuitComponent.UNEMBED_AT_TOKEN:
+            print(f"Calling unembed for token {self.run_data}")
             return self.circuit_lens.get_unembed_lens(
                 self.run_data["token_id"], self.run_data["seq_index"], **kwargs
             )
+        
         elif self.component == CircuitComponent.Z_FEATURE:
+            print(f"Calling z feature for {self.run_data}")
             return self.circuit_lens.get_head_seq_lens_for_z_feature(
                 self.run_data["layer"],
                 self.run_data["seq_index"],
                 self.run_data["feature"],
                 **kwargs,
             )
+        
         elif self.component == CircuitComponent.ATTN_HEAD:
+            print(f"Calling attn head for {self.run_data}")
             if head_type is None:
                 head_type = "q"
 
             if head_type == "q":
+                print(f"Calling q lens for {self.run_data}")
                 return self.circuit_lens.get_q_lens_on_head_seq(
                     self.run_data["layer"],
                     self.run_data["head"],
@@ -409,6 +412,7 @@ class ComponentLens:
                     **kwargs,
                 )
             elif head_type == "k":
+                print(f"Calling k lens for {self.run_data}")
                 return self.circuit_lens.get_k_lens_on_head_seq(
                     self.run_data["layer"],
                     self.run_data["head"],
@@ -417,6 +421,7 @@ class ComponentLens:
                     **kwargs,
                 )
             elif head_type == "v":
+                print(f"Calling v lens for {self.run_data}")
                 return self.circuit_lens.get_v_lens_at_seq(
                     self.run_data["layer"],
                     self.run_data["head"],
@@ -424,7 +429,9 @@ class ComponentLens:
                     self.run_data["feature"],
                     **kwargs,
                 )
+            
         elif self.component == CircuitComponent.MLP_FEATURE:
+            print(f"Calling mlp feature for {self.run_data}")
             return self.circuit_lens.get_mlp_feature_lens_at_seq(
                 self.run_data["layer"],
                 self.run_data["seq_index"],
@@ -755,6 +762,7 @@ class CircuitLens:
                         "source_index": source,
                         "feature": feature,
                         "destination_index": seq_index,
+                        "run_type": CircuitComponent.ATTN_HEAD,
                     },
                 )
             )
