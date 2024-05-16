@@ -10,8 +10,6 @@ from typing import List, Dict, TypedDict, Any, Union, Tuple, Optional
 from tqdm import trange
 from plotly_utils import imshow
 from pprint import pprint
-from transformer_lens.utils import get_act_name, to_numpy
-from enum import Enum
 
 from dataclasses import dataclass
 
@@ -327,6 +325,29 @@ class ComponentLens:
     component: str
     run_data: Dict[str, Any]
 
+    @property
+    def tuple_id(self):
+        if self.component == CircuitComponent.UNEMBED:
+            return (self.component, self.run_data["seq_index"], self.run_data["token"])
+        elif self.component == CircuitComponent.UNEMBED_AT_TOKEN:
+            return (self.component, self.run_data["seq_index"])
+        elif self.component == CircuitComponent.ATTN_HEAD:
+            return (
+                self.component,
+                self.run_data["layer"],
+                self.run_data["head"],
+                self.run_data["source_index"],
+                self.run_data["destination_index"],
+                self.run_data["feature"],
+            )
+        else:
+            return (
+                self.component,
+                self.run_data["layer"],
+                self.run_data["seq_index"],
+                self.run_data["feature"],
+            )
+
     @classmethod
     def create_root_unembed_lens(cls, circuit_lens: "CircuitLens", seq_index):
         return cls(
@@ -350,9 +371,9 @@ class ComponentLens:
             return f"Unembed at Token | Token: '{self.circuit_lens.model.tokenizer.decode([token_i])}' :: {token_i} | Seq Index: {seq_index}"
         elif self.component == CircuitComponent.Z_FEATURE:
             return f"Z Feature | Feature: {self.run_data['feature']} |Layer: {self.run_data['layer']} | Seq Index: {self.run_data['seq_index']}"
-        elif self.component == "head":
+        elif self.component == CircuitComponent.ATTN_HEAD:
             return f"Head | Layer: {self.run_data['layer']} | Head: {self.run_data['head']} | Source: {self.run_data['source_index']} | Destination: {self.run_data['destination_index']}"
-        elif self.component == "mlp":
+        elif self.component == CircuitComponent.MLP_FEATURE:
             return f"MLP Lens | Layer: {self.run_data['layer']} | Seq Index: {self.run_data['seq_index']} | Feature: {self.run_data['feature']}"
         else:
             return f"{self.component} | Layer: {self.run_data['layer']} | Seq Index: {self.run_data['seq_index']} | Feature: {self.run_data['feature']}"
@@ -831,6 +852,7 @@ class CircuitLens:
         feature: int,
     ):
         seq_index = self.process_seq_index(seq_index)
+
         active_features = self.get_active_features(seq_index)
         z_sae = self.z_saes[layer]
 

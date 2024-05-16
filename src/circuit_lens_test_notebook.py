@@ -10,6 +10,7 @@ from pprint import pprint
 import torch
 import einops
 import plotly.express as px
+from transformer_lens import HookedTransformer
 
 from torch import tensor
 
@@ -19,9 +20,27 @@ circuit_lens = CircuitLens("14. Colorado 15. Missouri 16. Illinois 17")
 # circuit_lens = CircuitLens("Mary and Jeff went to the store, and Mary gave an apple to Jeff")
 # circuit_lens = CircuitLens("He cut the finger right off my hand")
 
+# %%
+list(set([('a', 'b')]))
+('a', 'b') in set([('a', 'b')])
 
 # %%
-layer = 9
+a = set(['a', 'b'])
+print(a)
+a.discard('a')
+print(a)
+
+
+
+
+
+
+
+
+
+
+# %%
+layer = 8
 seq_index = 7
 
 layer_z = einops.rearrange(
@@ -41,10 +60,10 @@ z = z_recon / z_recon.norm(dim=-1, keepdim=True)
 
 
 
-l @ z, l @ e, z @ e
+l @ z, l @ e, z @ e, layer_z.norm(), z_recon.norm(),error.norm()
 # l @ e, l @ z, z @ e
 # %%
-error.norm(), e_recon.norm(), (error - e_recon).norm()
+error.norm(), e_recon.norm(), (error - e_recon).norm(), layer_z.norm()
 
 
 # %%
@@ -69,16 +88,51 @@ cos[range(13), range(13)] = 0
 # %%
 px.histogram(cos.max(dim=-1).values.cpu().detach().float()).show()
 
+# %%
+lens = circuit_lens
+
+lens.cache['attn_scores', 0].shape
+
+pattern = lens.cache['attn_scores', 0].softmax(dim=-1)
+
+torch.allclose(pattern, lens.cache['pattern', 0])
 
 
+# %%
 
+model = HookedTransformer.from_pretrained("gpt2-small", center_writing_weights=False)
+# %%
+unembed_children = circuit_lens.get_unembed_lens_for_prompt_token(0, visualize=True)
+
+# %%
+(1, 2, (3, 4)) == (1, 2, (3, 4))
 
 
 
 
 
 # %%
-unembed_children = circuit_lens.get_unembed_lens_for_prompt_token(-2)
+import time
+import random
+
+start = time.time()
+
+n_tokens = circuit_lens.n_tokens
+
+for i in range(4000):
+    token = random.randint(1, 8)
+
+    unembed_children = circuit_lens.get_unembed_lens_for_prompt_token(token, visualize=False)
+
+print(time.time() - start)
+
+# %%
+af = circuit_lens.get_active_features(7, cache=False)
+
+# %%
+af.vectors.shape
+
+
 
 # %%
 uu = unembed_children[1]()
