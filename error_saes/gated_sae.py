@@ -67,7 +67,7 @@ class GatedSAE(nn.Module):
         
         loss = mse_loss + l1_loss + aux_loss
 
-        return sae_out, loss
+        return sae_out, loss, mse_loss
 
     def per_item_mse_loss_with_target_norm(self, preds, target):
         return torch.nn.functional.mse_loss(preds, target, reduction='none')

@@ -1,82 +1,94 @@
-from gated_sae import GatedSAE
 import torch
-import einops
 import sys
-sys.path.append('../src')
-
-from circuit_lens import get_model_encoders
-from transformer_lens import HookedTransformer
-from jaxtyping import Float, Int
-from torch import Tensor
-import torch
-import einops
 from torch import Tensor
 import torch.optim as optim
-import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
-import torch.nn.functional as F
-from typing import List, Dict, TypedDict, Any, Union, Tuple, Optional
-from tqdm import trange
-from pprint import pprint
-from transformer_lens.utils import get_act_name, to_numpy
-from enum import Enum
-from dataclasses import dataclass
-from datasets import load_dataset
-from tqdm import tqdm 
+from typing import Tuple, Union
+from tqdm import trange, tqdm
 
-# Load in the sae errors and original z
-sae_errors = torch.load('data/sae_errors.pt')
-original_z = torch.load('data/original_z.pt')
+sys.path.append('../src')
 
-# Create GatedSAE
-n_input_features = 768
-projection_up = 4
-gated_sae = GatedSAE(n_input_features=768, n_learned_features=n_input_features*projection_up)
+from gated_sae import GatedSAE
+from vanilla_sae import SparseAutoencoder
 
-
-# Create GatedSAE dataset
 class GatedSAEDataset(Dataset):
-    def __init__(self, original_z, sae_errors):
+    def __init__(self, original_z: Tensor, sae_errors: Tensor):
         self.original_z = original_z
         self.sae_errors = sae_errors
 
     def __len__(self):
         return len(self.original_z)
 
-    def __getitem__(self, idx):
+    def __getitem__(self, idx: int) -> Tuple[Tensor, Tensor]:
         return self.original_z[idx], self.sae_errors[idx]
+
+def create_dataloaders(dataset: Dataset, batch_size: int = 64, train_split: float = 0.8) -> Tuple[DataLoader, DataLoader]:
+    train_size = int(train_split * len(dataset))
+    test_size = len(dataset) - train_size
+    train_dataset, test_dataset = torch.utils.data.random_split(dataset, [train_size, test_size])
+
+    train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+    test_dataloader = DataLoader(test_dataset, batch_size=batch_size, shuffle=True)
     
-gated_sae_dataset = GatedSAEDataset(original_z, sae_errors)
+    return train_dataloader, test_dataloader
 
-# Create GatedSAE train dataloader and test dataloader
-train_size = int(0.8 * len(gated_sae_dataset))
-test_size = len(gated_sae_dataset) - train_size
-train_dataset, test_dataset = torch.utils.data.random_split(gated_sae_dataset, [train_size, test_size])
+def train_model(model: Union[GatedSAE, SparseAutoencoder], train_dataloader: DataLoader, test_dataloader: DataLoader, n_epochs: int = 1, lr: float = 0.001) -> float:
+    optimizer = optim.Adam(model.parameters(), lr=lr)
 
-batch_size=32
-train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-test_dataloader = DataLoader(test_dataset, batch_size=batch_size, shuffle=True)
+    # Print initial test loss
+    initial_test_loss, initial_recon_loss = evaluate_model(model, test_dataloader)
+    print(f"Initial Test Loss {initial_test_loss:.4f} | Initial Reconstruction Error {initial_recon_loss:.4f}")
 
-torch.set_grad_enabled(True)
+    for epoch in trange(n_epochs):
+        print(f"Epoch {epoch + 1}")
+        model.train()
+        for x, y in tqdm(train_dataloader, desc='Training...'):
+            optimizer.zero_grad()
+            _, loss, reconstruction_error = model(x, y)
+            loss.backward()
+            optimizer.step()
+        
+        test_loss, recon_loss = evaluate_model(model, test_dataloader)
+        print(f"Test Loss {test_loss:.4f} | Reconstruction Error {recon_loss:.4f}")
 
-n_epochs = 10
-gated_sae = GatedSAE(n_input_features=768, n_learned_features=768*4)
-optimizer = optim.Adam(gated_sae.parameters(), lr=0.001)
+    return recon_loss
 
-for epoch in range(n_epochs):
-    print(f"Epoch {epoch}")
-    for i, (x, y) in enumerate(train_dataloader):
-        optimizer.zero_grad()
-        sae_out, loss = gated_sae(x, y)
-        loss.backward()
-        print(f"Batch {i} Loss {loss.item()}")
-        optimizer.step()
-        if i % (n_epochs // 10) == 0:
-            # Evaluate on test set
-            test_loss = 0
-            for x, y in test_dataloader:
-                sae_out, loss = gated_sae(x, y)
-                test_loss += loss.item()
+def evaluate_model(model: Union[GatedSAE, SparseAutoencoder], dataloader: DataLoader) -> Tuple[float, float]:
+    model.eval()
+    total_loss, total_recon_loss = 0.0, 0.0
+    with torch.no_grad():
+        for x, y in tqdm(dataloader, desc='Evaluating...'):
+            _, loss, recon_loss = model(x, y)
+            total_loss += loss.item()
+            total_recon_loss += recon_loss.item()
+    avg_loss = total_loss / len(dataloader)
+    avg_recon_loss = total_recon_loss / len(dataloader)
+    return avg_loss, avg_recon_loss
 
-# Save to data folder
-torch.save(gated_sae, 'data/gated_sae.pt')
+def main(model_type: str, n_epochs: int = 1, l1_coefficient: float = 1e-4, batch_size: int = 64, lr: float = 0.001) -> float:
+    sae_errors = torch.load('data/sae_errors.pt')
+    original_z = torch.load('data/original_z.pt')
+    
+    dataset = GatedSAEDataset(original_z, sae_errors)
+    train_dataloader, test_dataloader = create_dataloaders(dataset, batch_size)
+    
+    n_input_features = 768
+    projection_up = 8
+
+    if model_type == 'gated':
+        model = GatedSAE(n_input_features=n_input_features, n_learned_features=n_input_features * projection_up, l1_coefficient=l1_coefficient)
+    else:
+        model = SparseAutoencoder(n_input_features=n_input_features, n_learned_features=n_input_features * projection_up, l1_coefficient=l1_coefficient)
+    
+    final_recon_loss = train_model(model, train_dataloader, test_dataloader, n_epochs, lr)
+
+    model_path = 'data/gated_sae.pt' if model_type == 'gated' else 'data/sparse_sae.pt'
+    torch.save(model, model_path)
+
+    return final_recon_loss
+
+if __name__ == '__main__':
+    final_recon_loss = main(model_type='gated', n_epochs=2, l1_coefficient=1e-4)
+    print(f"Final Reconstruction Error: {final_recon_loss:.4f}")
+
+

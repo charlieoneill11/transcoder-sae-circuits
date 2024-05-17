@@ -22,7 +22,12 @@ from dataclasses import dataclass
 from datasets import load_dataset
 from tqdm import tqdm 
 
-_, z_saes, _ = get_model_encoders(device='cpu')
+device = 'cuda' if torch.cuda.is_available() else 'cpu'
+print(f"SAE inference on {device}...")
+
+torch.set_grad_enabled(False)
+
+_, z_saes, _ = get_model_encoders(device=device)
 layer = 9
 sae = z_saes[layer]
 del z_saes
@@ -44,17 +49,17 @@ z_acts = torch.load('data/z_acts.pt')
 sae_dataset = SAEDataset(z_acts)
 
 # Create SAE dataloader
-batch_size = 64
+batch_size = 16
 sae_dataloader = DataLoader(sae_dataset, batch_size=batch_size, shuffle=True)
-
-print(next(iter(sae_dataloader)).shape)
 
 # Get SAE errors on each z_acts - we need to store the errors, and the original z_acts
 sae_errors = []
 original_z = []
 for z_batch in tqdm(sae_dataloader):
-    _, z_recon, z_acts, _, _ = sae(z_batch)
+    _, z_recon, _, _, _ = sae(z_batch)
     sae_error = z_batch - z_recon
+    # Assert sae_error + z_recon = z_batch
+    assert torch.allclose(z_recon + sae_error, z_batch, rtol=1e-4, atol=1e-4)
     sae_errors.append(sae_error)
     original_z.append(z_batch)
     
