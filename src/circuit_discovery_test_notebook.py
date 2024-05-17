@@ -6,6 +6,7 @@
 from example_prompts import SUCCESSOR_EXAMPLE_PROMPT, IOI_EXAMPLE_PROMPT
 from circuit_discovery import CircuitDiscovery, only_feature
 from transformer_lens import HookedTransformer, utils
+from transformer_lens.hook_points import HookPoint
 import torch.nn.functional as F
 
 from rich import print as rprint
@@ -16,25 +17,35 @@ import time
 
 
 # %%
+
 torch.set_grad_enabled(False)
 
 # %%
 
 # %%
-start = time.time()
-
-
 inverse = "Mary and Jeff went to the store, and Jeff gave an apple to Mary"
 
-cd = CircuitDiscovery(IOI_EXAMPLE_PROMPT, -2, allowed_components_filter=only_feature)
+cd = CircuitDiscovery(SUCCESSOR_EXAMPLE_PROMPT, -2, allowed_components_filter=only_feature)
+# cd = CircuitDiscovery(IOI_EXAMPLE_PROMPT, -2, allowed_components_filter=only_feature)
 
 cd.add_greedy_first_pass()
 
-print("\n Elapsed", time.time() - start)
+
+# %%
+cd.visualize_graph()
 
 # %%
 
-cd.visualize_graph()
+cd.visualize_current_graph_performance(head_ablation_style="zero", include_all_heads=True, include_all_mlps=True)
+
+# %%
+gl = cd.get_logits_for_current_graph()
+
+# %%
+gl.shape
+
+
+
 
 # %%
 model: HookedTransformer = cd.model
@@ -103,7 +114,7 @@ def visualize_top_tokens(tokens, logits, seq_index, token=None,k=10, model=model
     selected_token_table.add_column("Rank")
     selected_token_table.add_column("Token")
     selected_token_table.add_column("Prob")
-    selected_token_table.add_column("Neg Log Prob")
+    selected_token_table.add_column("-Log Prob")
     selected_token_table.add_column("Token Index")
 
     selected_token_table.add_row(
@@ -118,7 +129,7 @@ def visualize_top_tokens(tokens, logits, seq_index, token=None,k=10, model=model
     top_table.add_column("Rank")
     top_table.add_column("Token")
     top_table.add_column("Prob")
-    top_table.add_column("Neg Log Prob")
+    top_table.add_column("-Log Prob")
     top_table.add_column("Token Index")
 
     for i, index in enumerate(indices):
@@ -134,9 +145,37 @@ def visualize_top_tokens(tokens, logits, seq_index, token=None,k=10, model=model
     rprint(top_table)
 
 # %%
-visualize_top_tokens(tokens, logits, -2, token=606)
-# visualize_top_tokens(tokens, logits, -2) #, token=262)
+# visualize_top_tokens(tokens, logits, -2, token=606)
+visualize_top_tokens(tokens, logits, -2) #, token=262)
 
+
+
+# %%
+list(zip([1, 2], [3, 4], [5, 6]))
+
+# %%
+def hook(
+    acts,
+    hook: HookPoint
+):
+    print(hook.name, hook.layer())
+
+ftr = lambda x: x.endswith('z')
+
+_ =  model.run_with_hooks(IOI_EXAMPLE_PROMPT,
+                     fwd_hooks=[(ftr, hook)])
+
+# %%
+logits, cache = model.run_with_cache(IOI_EXAMPLE_PROMPT)
+
+# %%
+cache['z', 0].shape
+
+# %%
+list(cache.keys())
+
+# %%
+logits.shape
 
 
 # %%
