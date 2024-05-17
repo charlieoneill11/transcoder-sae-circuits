@@ -3,10 +3,10 @@
 %autoreload 2
 
 # %%
+
 from circuit_lens import CircuitLens
 
 # %%
-
 lens = CircuitLens("Mary and Jeff went to the store, and Mary gave an apple to Jeff")
 
 # %%

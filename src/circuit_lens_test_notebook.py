@@ -11,8 +11,65 @@ import torch
 import einops
 import plotly.express as px
 from transformer_lens import HookedTransformer
+from graphviz import Digraph
 
 from torch import tensor
+
+# %%
+G = Digraph()
+G.graph_attr.update(rankdir='BT', newrank='true')
+G.node_attr.update(shape="box", style="rounded")
+
+with G.subgraph() as subgraph:
+    subgraph.attr(rank='same')
+
+    subgraph.node('A', shape="none")
+    subgraph.node('B')  
+    subgraph.edge('A', 'B', style="invis", minlen="2")
+
+
+with G.subgraph() as subgraph:
+    subgraph.attr(rank='same')
+
+    subgraph.node('C', shape="none")
+    subgraph.node('D')  
+    subgraph.node("E")
+
+    # subgraph.edge('C', 'D', style="invis", minlen="2")
+
+
+G.edges(["AC", "AD", "BE"])
+
+G
+
+# %%
+G = Digraph(name='feature circuit')
+
+# Add nodes and assign them to groups
+G.node('A', group='1')
+G.node('B', group='1')
+G.node('C', group='2')
+G.node('D', group='2')
+
+# To ensure they are all in the same rank
+with G.subgraph(nm) as s:
+    s.attr(rank='same')
+    s.node('A')
+    s.node('B')
+    s.node('C')
+    s.node('D')
+
+# Add edges
+G.edge('A', 'C')
+G.edge('B', 'D')
+
+# Render the graph
+G
+
+
+
+
+
 
 # %%
 circuit_lens = CircuitLens("14. Colorado 15. Missouri 16. Illinois 17")
@@ -29,6 +86,15 @@ a = set(['a', 'b'])
 print(a)
 a.discard('a')
 print(a)
+
+# %%
+tuple(list((1, 2, 3)))
+
+# %%
+
+(1, 2, 3)[:2]
+
+
 
 
 

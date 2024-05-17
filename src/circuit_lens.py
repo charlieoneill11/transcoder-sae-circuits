@@ -159,42 +159,38 @@ class ActiveFeatures:
         features = []
 
         for v, i in zip(values.tolist(), indices.tolist()):
+            feature_i = self.features[i].item()
+
             if i == 0:
-                features.append((CircuitComponent.EMBED, 0, self.features[i], v))
+                features.append((CircuitComponent.EMBED, 0, feature_i, v))
                 break
             elif i == 1:
-                features.append((CircuitComponent.POS_EMBED, 0, self.features[i], v))
+                features.append((CircuitComponent.POS_EMBED, 0, feature_i, v))
                 break
 
             start_i = 2
 
             for l, key in enumerate(self.keys):
                 if i == start_i:
-                    features.append((CircuitComponent.BIAS_O, l, self.features[i], v))
+                    features.append((CircuitComponent.BIAS_O, l, feature_i, v))
                     break
                 start_i += 1
 
                 if i == start_i:
                     # features.append(("Z SAE Error", l, self.features[i], v))
-                    features.append(
-                        (CircuitComponent.Z_SAE_ERROR, l, self.features[i], v)
-                    )
+                    features.append((CircuitComponent.Z_SAE_ERROR, l, feature_i, v))
                     break
                 start_i += 1
 
                 if i == start_i:
                     # features.append(("Z SAE Bias", l, self.features[i], v))
-                    features.append(
-                        (CircuitComponent.Z_SAE_BIAS, l, self.features[i], v)
-                    )
+                    features.append((CircuitComponent.Z_SAE_BIAS, l, feature_i, v))
                     break
                 start_i += 1
 
                 if i < start_i + key["attn"]:
                     # features.append(("Attn", l, self.features[i], v))
-                    features.append(
-                        (CircuitComponent.Z_FEATURE, l, self.features[i], v)
-                    )
+                    features.append((CircuitComponent.Z_FEATURE, l, feature_i, v))
                     break
 
                 start_i += key["attn"]
@@ -205,7 +201,7 @@ class ActiveFeatures:
                         (
                             CircuitComponent.TRANSCODER_ERROR,
                             l,
-                            self.features[i],
+                            feature_i,
                             v,
                         )
                     )
@@ -218,7 +214,7 @@ class ActiveFeatures:
                         (
                             CircuitComponent.TRANSCODER_BIAS,
                             l,
-                            self.features[i],
+                            feature_i,
                             v,
                         )
                     )
@@ -227,9 +223,7 @@ class ActiveFeatures:
 
                 if i < start_i + key["mlp"]:
                     # features.append(("MLP", l, self.features[i], v))
-                    features.append(
-                        (CircuitComponent.MLP_FEATURE, l, self.features[i], v)
-                    )
+                    features.append((CircuitComponent.MLP_FEATURE, l, feature_i, v))
                     break
 
                 start_i += key["mlp"]
@@ -242,23 +236,26 @@ class ActiveFeatures:
         circuit_lens: "CircuitLens",
         seq_index: int,
         k=10,
-    ):
+    ) -> List["ComponentLensWithValue"]:
         features = self.get_top_k_features(activations, k=k)
 
         lens_runs = []
 
         for feature in features:
-            component, layer, feature_i, *_ = feature
+            component, layer, feature_i, value = feature
 
             lens_runs.append(
-                ComponentLens(
-                    circuit_lens=circuit_lens,
-                    component=component,
-                    run_data={
-                        "layer": layer,
-                        "seq_index": seq_index,
-                        "feature": feature_i,
-                    },
+                (
+                    ComponentLens(
+                        circuit_lens=circuit_lens,
+                        component=component,
+                        run_data={
+                            "layer": layer,
+                            "seq_index": seq_index,
+                            "feature": feature_i,
+                        },
+                    ),
+                    value,
                 )
             )
 
@@ -317,6 +314,9 @@ class ActiveFeatures:
             start_i += key["mlp"]
 
         return visualization
+
+
+ComponentLensWithValue = Tuple["ComponentLens", float]
 
 
 @dataclass
@@ -385,30 +385,18 @@ class ComponentLens:
     def feature(self):
         return self.run_data.get("feature", -1)
 
-    # _cache = None
-    # _cache_k = None
-
-    # def __call__(self, head_type=None, **kwargs):
-    #     if self._cache is not None and (
-    #         "k" not in kwargs or self._cache_k == kwargs.get("k", 10)
-    #     ):
-    #         return self._cache
-
-    #     self._cache_k = kwargs.get("k", 10)
-    #     self._cache = self._call(head_type=head_type, **kwargs)
-
-    #     return self._cache
-
-    # def _call(self, head_type=None, **kwargs):
-
-    def __call__(self, head_type=None, **kwargs) -> List["ComponentLens"]:
+    def __call__(self, head_type=None, **kwargs) -> List[ComponentLensWithValue]:
         if self.component == CircuitComponent.UNEMBED:
             return self.circuit_lens.get_unembed_lens(
                 self.run_data["token_id"], self.run_data["seq_index"], **kwargs
             )
         elif self.component == CircuitComponent.UNEMBED_AT_TOKEN:
+            seq_index = self.run_data["seq_index"]
+            seq_index = self.circuit_lens.process_seq_index(seq_index)
+            token_i = self.circuit_lens.tokens[0, seq_index + 1].item()
+
             return self.circuit_lens.get_unembed_lens(
-                self.run_data["token_id"], self.run_data["seq_index"], **kwargs
+                int(token_i), self.run_data["seq_index"], **kwargs
             )
         elif self.component == CircuitComponent.Z_FEATURE:
             return self.circuit_lens.get_head_seq_lens_for_z_feature(
@@ -749,7 +737,7 @@ class CircuitLens:
 
     def get_head_seq_lens_for_z_feature(
         self, layer: int, seq_index: int, feature: int, visualize=True, k=10
-    ):
+    ) -> List[ComponentLensWithValue]:
         feature_act = self.get_head_seq_activations_for_z_feature(
             layer, seq_index, feature
         )
@@ -762,21 +750,24 @@ class CircuitLens:
         lens_runs = []
         vis_list = []
 
-        for index, value in zip(indices, values):
+        for index, value in zip(indices.tolist(), values.tolist()):
             head = index // self.n_tokens
             source = index % self.n_tokens
 
             lens_runs.append(
-                ComponentLens(
-                    circuit_lens=self,
-                    component=CircuitComponent.ATTN_HEAD,
-                    run_data={
-                        "layer": layer,
-                        "head": head,
-                        "source_index": source,
-                        "feature": feature,
-                        "destination_index": seq_index,
-                    },
+                (
+                    ComponentLens(
+                        circuit_lens=self,
+                        component=CircuitComponent.ATTN_HEAD,
+                        run_data={
+                            "layer": layer,
+                            "head": head,
+                            "source_index": source,
+                            "feature": feature,
+                            "destination_index": seq_index,
+                        },
+                    ),
+                    value,
                 )
             )
 
