@@ -25,21 +25,78 @@ torch.set_grad_enabled(False)
 # %%
 inverse = "Mary and Jeff went to the store, and Jeff gave an apple to Mary"
 
-cd = CircuitDiscovery(SUCCESSOR_EXAMPLE_PROMPT, -2, allowed_components_filter=only_feature)
-# cd = CircuitDiscovery(IOI_EXAMPLE_PROMPT, -2, allowed_components_filter=only_feature)
+# cd = CircuitDiscovery(SUCCESSOR_EXAMPLE_PROMPT, -2, allowed_components_filter=only_feature)
+cd = CircuitDiscovery(IOI_EXAMPLE_PROMPT, -2, allowed_components_filter=only_feature)
 
-cd.add_greedy_first_pass()
+# %%
+# passes = 3
 
+cd.reset_graph()
+# for _ in range(passes):
+#     cd.add_greedy_pass()
+cd.add_greedy_pass(contributors_per_node=2)
+# %%
+
+cd.print_attn_heads_and_mlps_in_graph()
+
+
+# %%
+
+cd.visualize_current_graph_performance(
+    head_ablation_type="bos", 
+    # head_ablation_type="zero", 
+    # include_all_heads=True,
+    # include_all_mlps=True
+)
 
 # %%
 cd.visualize_graph()
 
 # %%
+# cd.visualize_current_graph_performance(head_ablation_style="zero", include_all_heads=True, include_all_mlps=True)
 
-cd.visualize_current_graph_performance(head_ablation_style="zero", include_all_heads=True, include_all_mlps=True)
+# %%
+a = [1,2, 3]
+b = [4, 5, 6]
+
+a.extend(b)
+a
+
+
+
+# %%
+
+
+# %%
+
+cd.print_attn_heads_and_mlps_in_graph()
+
+# %%
+cd.visualize_attn_heads_in_graph(value_weighted=False)
+
+# %%
+
+
+
+# %%
+list(reversed(range(0, 10)))
+
+# %%
+cache['v', 0].shape
+
+
+
 
 # %%
 gl = cd.get_logits_for_current_graph()
+
+# %%
+a = [4, 1, 2, 3]
+print('asdf', a.sort())
+a
+
+
+
 
 # %%
 gl.shape
@@ -169,7 +226,7 @@ _ =  model.run_with_hooks(IOI_EXAMPLE_PROMPT,
 logits, cache = model.run_with_cache(IOI_EXAMPLE_PROMPT)
 
 # %%
-cache['z', 0].shape
+cache['v', 0].shape
 
 # %%
 list(cache.keys())

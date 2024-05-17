@@ -1,5 +1,6 @@
 import torch
 import einops
+import circuitsvis as cv
 
 from typing import Union, Optional, List, Dict, Tuple, Set, Callable
 from circuit_lens import (
@@ -12,6 +13,8 @@ from graphviz import Digraph
 from functools import partial
 from transformer_lens.hook_points import HookPoint
 from ranking_utils import visualize_top_tokens
+from jaxtyping import Float
+from IPython.display import HTML
 
 from abc import ABC
 
@@ -168,6 +171,10 @@ class ComponentEdgeTracker:
 
     def get_contributors(self, reciever: Tuple) -> List[Tuple]:
         return list(self._reciever_to_contributors.get(reciever, set()))
+
+    def clear(self):
+        self._reciever_to_contributors = {}
+        self._contributor_to_recievers = {}
 
 
 class TransformerAnalysisModel(AnalysisObject):
@@ -602,6 +609,9 @@ class CircuitDiscovery:
     def mlp_transcoders(self):
         return self.lens.mlp_transcoders
 
+    def reset_graph(self):
+        self.transformer_model.edge_tracker.clear()
+
     def traverse_graph(
         self, fn: Callable[[CircuitDiscoveryNode], None], print_node_trace=False
     ):
@@ -623,23 +633,19 @@ class CircuitDiscovery:
             fn(node)
 
             if isinstance(node, CircuitDiscoveryRegularNode):
-                if node.contributors_in_graph:
-                    queue.append(*node.contributors_in_graph)
+                queue.extend(node.contributors_in_graph)
+
             elif isinstance(node, CircuitDiscoveryHeadNode):
                 for head_type in ["q", "k", "v"]:
-                    contribs = node.contributors_in_graph(head_type)
+                    queue.extend(node.contributors_in_graph(head_type))
 
-                    if contribs:
-                        queue.append(*contribs)
-
-    def add_greedy_first_pass(self):
+    def add_greedy_pass(self, contributors_per_node=1):
         visited_ids = []
 
         queue: List[CircuitDiscoveryNode] = [self.root_node]
 
         while len(queue) > 0:
             node = queue.pop(0)
-            print(node.tuple_id)
 
             if node.tuple_id in visited_ids:
                 continue
@@ -651,33 +657,39 @@ class CircuitDiscovery:
                 if len(top_contribs) == 0:
                     continue
 
-                child = top_contribs[0]
+                total_contrib = 0
 
-                node.contributors_in_graph
+                for child in top_contribs[:contributors_per_node]:
+                    child_discovery_node = node.add_contributor_edge(child[0])
 
-                child_discovery_node = node.add_contributor_edge(child[0])
+                    total_contrib += child[1]
 
-                queue.append(child_discovery_node)
+                    queue.append(child_discovery_node)
+
+                print(node.tuple_id, f"Contrib: {total_contrib*100:.3g}%")
             elif isinstance(node, CircuitDiscoveryHeadNode):
                 for head_type in ["q", "k", "v"]:
                     top_contribs = node.get_top_unused_contributors(head_type)
                     if len(top_contribs) == 0:
                         continue
 
-                    child = top_contribs[0]
+                    total_contrib = 0
 
-                    child_discovery_node = node.add_contributor_edge(
-                        head_type, child[0]
+                    for child in top_contribs[:contributors_per_node]:
+                        child_discovery_node = node.add_contributor_edge(
+                            head_type, child[0]
+                        )
+
+                        total_contrib += child[1]
+
+                        queue.append(child_discovery_node)
+
+                    print(
+                        node.tuple_id_for_head_type(head_type),
+                        f"Contrib: {total_contrib:.3g}%",
                     )
 
-                    queue.append(child_discovery_node)
-
-    def get_logits_for_current_graph(self, **kwargs):
-        include_all_mlps = kwargs.get("include_all_mlps", False)
-        include_all_heads = kwargs.get("include_all_heads", False)
-
-        head_ablation_style = kwargs.get("head_ablation_style", "bos")
-
+    def get_heads_and_mlps_in_current_graph(self) -> Tuple[List[List[int]], List[int]]:
         attn_heads_set = set()
         mlps = set()
 
@@ -703,6 +715,73 @@ class CircuitDiscovery:
 
         for layer, head in attn_heads_set:
             attn_heads[layer].append(head)
+
+        return attn_heads, mlps
+
+    def print_attn_heads_and_mlps_in_graph(self):
+        attn_heads, mlps = self.get_heads_and_mlps_in_current_graph()
+
+        for layer in reversed(range(self.model.cfg.n_layers)):
+            layer_heads = attn_heads[layer]
+            layer_heads.sort()
+
+            if layer in mlps:
+                print(f"MLP{layer}")
+            if layer_heads:
+                print(f"L{layer}H:", layer_heads)
+
+    def visualize_attn_heads_in_graph(self, max_width=800, value_weighted=False):
+        _, cache = self.model.run_with_cache(self.tokens)
+
+        attn_heads, _ = self.get_heads_and_mlps_in_current_graph()
+
+        # Create the plotting data
+        labels: List[str] = []
+        all_patterns: List[Float[torch.Tensor, "dest_pos src_pos"]] = []
+
+        # Assume we have a single batch item
+        batch_index = 0
+
+        for layer in range(self.model.cfg.n_layers):
+            for head in attn_heads[layer]:
+                labels.append(f"L{layer}H{head}")
+
+                # Get the attention patterns for the head
+                # Attention patterns have shape [batch, head_index, query_pos, key_pos]
+                if value_weighted:
+                    value_norms = cache["v", layer][batch_index, :, head].norm(dim=-1)
+
+                    pattern = cache["attn", layer][batch_index][head]
+
+                    all_patterns.append(pattern * value_norms.unsqueeze(0))
+                else:
+                    all_patterns.append(cache["attn", layer][batch_index, head])
+
+        # Combine the patterns into a single tensor
+        patterns: Float[torch.Tensor, "head_index dest_pos src_pos"] = torch.stack(
+            all_patterns, dim=0
+        )
+
+        # Circuitsvis Plot (note we get the code version so we can concatenate with the title)
+        plot = cv.attention.attention_heads(
+            attention=patterns, tokens=self.str_tokens, attention_head_names=labels
+        ).show_code()
+
+        # Display the title
+        title_html = f"<h2>Attention Heads in Graph</h2><br/>"
+
+        # Return the visualisation as raw code
+        return HTML(
+            f"<div style='max-width: {str(max_width)}px;'>{title_html + plot}</div>"
+        )
+
+    def get_logits_for_current_graph(self, **kwargs):
+        include_all_mlps = kwargs.get("include_all_mlps", False)
+        include_all_heads = kwargs.get("include_all_heads", False)
+
+        head_ablation_style = kwargs.get("head_ablation_style", "bos")
+
+        attn_heads, mlps = self.get_heads_and_mlps_in_current_graph()
 
         def ablate_z_out(acts, hook: HookPoint, attn_heads):
             layer_heads = attn_heads[hook.layer()]

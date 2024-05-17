@@ -16,6 +16,14 @@ from graphviz import Digraph
 from torch import tensor
 
 # %%
+a = {}
+
+a.setdefault('a', set()).add(1)
+
+bool([])
+
+
+# %%
 G = Digraph()
 G.graph_attr.update(rankdir='BT', newrank='true')
 G.node_attr.update(shape="box", style="rounded")
