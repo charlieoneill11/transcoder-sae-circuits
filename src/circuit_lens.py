@@ -11,8 +11,24 @@ from tqdm import trange
 from plotly_utils import imshow
 from pprint import pprint
 from transformer_lens.utils import get_act_name, to_numpy
+from enum import Enum
 
 from dataclasses import dataclass
+
+
+class CircuitComponent:
+    Z_FEATURE = "z_feature"
+    MLP_FEATURE = "mlp_feature"
+    ATTN_HEAD = "attn_head"
+    UNEMBED = "unembed"
+    UNEMBED_AT_TOKEN = "unembed_at_token"
+    EMBED = "embed"
+    POS_EMBED = "pos_embed"
+    BIAS_O = "b_O"
+    Z_SAE_ERROR = "z_sae_error"
+    Z_SAE_BIAS = "z_sae_bias"
+    TRANSCODER_ERROR = "transcoder_error"
+    TRANSCODER_BIAS = "transcoder_bias"
 
 
 class LayerKey(TypedDict):
@@ -146,48 +162,76 @@ class ActiveFeatures:
 
         for v, i in zip(values.tolist(), indices.tolist()):
             if i == 0:
-                features.append(("embed", 0, self.features[i], v))
+                features.append((CircuitComponent.EMBED, 0, self.features[i], v))
                 break
             elif i == 1:
-                features.append(("pos_embed", 0, self.features[i], v))
+                features.append((CircuitComponent.POS_EMBED, 0, self.features[i], v))
                 break
 
             start_i = 2
 
             for l, key in enumerate(self.keys):
                 if i == start_i:
-                    features.append(("b_O", l, self.features[i], v))
+                    features.append((CircuitComponent.BIAS_O, l, self.features[i], v))
                     break
                 start_i += 1
 
                 if i == start_i:
-                    features.append(("Z SAE Error", l, self.features[i], v))
+                    # features.append(("Z SAE Error", l, self.features[i], v))
+                    features.append(
+                        (CircuitComponent.Z_SAE_ERROR, l, self.features[i], v)
+                    )
                     break
                 start_i += 1
 
                 if i == start_i:
-                    features.append(("Z SAE Bias", l, self.features[i], v))
+                    # features.append(("Z SAE Bias", l, self.features[i], v))
+                    features.append(
+                        (CircuitComponent.Z_SAE_BIAS, l, self.features[i], v)
+                    )
                     break
                 start_i += 1
 
                 if i < start_i + key["attn"]:
-                    features.append(("Attn", l, self.features[i], v))
+                    # features.append(("Attn", l, self.features[i], v))
+                    features.append(
+                        (CircuitComponent.Z_FEATURE, l, self.features[i], v)
+                    )
                     break
 
                 start_i += key["attn"]
 
                 if i == start_i:
-                    features.append(("Transcoder Error", l, self.features[i], v))
+                    # features.append(("Transcoder Error", l, self.features[i], v))
+                    features.append(
+                        (
+                            CircuitComponent.TRANSCODER_ERROR,
+                            l,
+                            self.features[i],
+                            v,
+                        )
+                    )
                     break
                 start_i += 1
 
                 if i == start_i:
-                    features.append(("Transcoder Bias", l, self.features[i], v))
+                    # features.append(("Transcoder Bias", l, self.features[i], v))
+                    features.append(
+                        (
+                            CircuitComponent.TRANSCODER_BIAS,
+                            l,
+                            self.features[i],
+                            v,
+                        )
+                    )
                     break
                 start_i += 1
 
                 if i < start_i + key["mlp"]:
-                    features.append(("MLP", l, self.features[i], v))
+                    # features.append(("MLP", l, self.features[i], v))
+                    features.append(
+                        (CircuitComponent.MLP_FEATURE, l, self.features[i], v)
+                    )
                     break
 
                 start_i += key["mlp"]
@@ -197,7 +241,7 @@ class ActiveFeatures:
     def get_top_k_lens_runs(
         self,
         activations: Float[Tensor, "comp"],
-        web: "CircuitLens",
+        circuit_lens: "CircuitLens",
         seq_index: int,
         k=10,
     ):
@@ -206,21 +250,17 @@ class ActiveFeatures:
         lens_runs = []
 
         for feature in features:
-            if feature[0] == "Attn":
-                run_type = "z_feature_head_seq"
-            elif feature[0] == "MLP":
-                run_type = "mlp"
-            else:
-                run_type = feature[0]
+            component, layer, feature_i, *_ = feature
 
             lens_runs.append(
                 ComponentLens(
-                    web,
+                    circuit_lens=circuit_lens,
+                    component=component,
                     run_data={
-                        "run_type": run_type,
-                        "layer": feature[1],
+                        "layer": layer,
                         "seq_index": seq_index,
-                        "feature": feature[2],
+                        "feature": feature_i,
+                        "run_type": component,
                     },
                 )
             )
@@ -231,8 +271,8 @@ class ActiveFeatures:
         features = self.get_top_k_features(activations, k=k)
 
         return [
-            f"{kind} | Layer: {layer} | Feature: {feature} | Contribution: {value*100:.3g}%"
-            for kind, layer, feature, value in features
+            f"{kind} | Layer: {layer} | Feature: {feature_i} | Contribution: {value*100:.3g}%"
+            for kind, layer, feature_i, value in features
         ]
 
     def reshape_activations_for_visualization(
@@ -284,46 +324,87 @@ class ActiveFeatures:
 
 @dataclass
 class ComponentLens:
-    web: "CircuitLens"
+    circuit_lens: "CircuitLens"
+    component: str
     run_data: Dict[str, Any]
 
-    @property
-    def run_type(self):
-        return self.run_data["run_type"]
+    @classmethod
+    def create_root_unembed_lens(cls, circuit_lens: "CircuitLens", seq_index):
+        token_id = circuit_lens.tokens[0, seq_index].item()
+        return cls(
+            circuit_lens=circuit_lens,
+            component=CircuitComponent.UNEMBED_AT_TOKEN,
+            run_data={
+                "seq_index": seq_index,
+                "token_id": token_id,
+                "run_type": CircuitComponent.UNEMBED_AT_TOKEN,
+            },
+        )
 
     def __str__(self):
-        if self.run_type == "unembed":
-            return f"Unembed | Token: '{self.web.model.tokenizer.decode([self.run_data['token']])}' :: {self.run_data['token']} | Seq Index: {self.run_data['seq_index']}"
-        elif self.run_type == "z_feature_head_seq":
-            return f"Z Feature Head/Seq | Feature: {self.run_data['feature']} |Layer: {self.run_data['layer']} | Seq Index: {self.run_data['seq_index']}"
-        elif self.run_type == "head":
+        if self.component == CircuitComponent.UNEMBED:
+            return f"Unembed | Token: '{self.circuit_lens.model.tokenizer.decode([self.run_data['token']])}' :: {self.run_data['token']} | Seq Index: {self.run_data['seq_index']}"
+        elif self.component == CircuitComponent.UNEMBED_AT_TOKEN:
+            seq_index = self.run_data["seq_index"]
+
+            seq_index = self.circuit_lens.process_seq_index(seq_index)
+
+            token_i = self.circuit_lens.tokens[0, seq_index + 1].item()
+
+            return f"Unembed at Token | Token: '{self.circuit_lens.model.tokenizer.decode([token_i])}' :: {token_i} | Seq Index: {seq_index}"
+        elif self.component == CircuitComponent.Z_FEATURE:
+            return f"Z Feature | Feature: {self.run_data['feature']} |Layer: {self.run_data['layer']} | Seq Index: {self.run_data['seq_index']}"
+        elif self.component == "attn_head":
             return f"Head | Layer: {self.run_data['layer']} | Head: {self.run_data['head']} | Source: {self.run_data['source_index']} | Destination: {self.run_data['destination_index']}"
-        elif self.run_type == "mlp":
+        elif self.component == "mlp_feature":
             return f"MLP Lens | Layer: {self.run_data['layer']} | Seq Index: {self.run_data['seq_index']} | Feature: {self.run_data['feature']}"
         else:
-            return f"{self.run_type} | Layer: {self.run_data['layer']} | Seq Index: {self.run_data['seq_index']} | Feature: {self.run_data['feature']}"
+            print(f"Unknown component {self.component}, run_data: {self.run_data}")
+            return f"{self.component} | Layer: {self.run_data['layer']} | Seq Index: {self.run_data['seq_index']} | Feature: {self.run_data['feature']}"
 
     def __repr__(self):
         return str(self)
 
-    def __call__(self, head_type=None, **kwargs):
-        if self.run_type == "unembed":
-            return self.web.get_unembed_lens(
-                self.run_data["token_id"], self.run_data["seq_index"] ** kwargs
+    @property
+    def feature(self):
+        return self.run_data.get("feature", -1)
+    
+
+    def __call__(self, head_type=None, **kwargs) -> List["ComponentLens"]:
+        print(f"Run data: {self.run_data}")  # debugging, remove later
+
+        if self.component in [CircuitComponent.UNEMBED, CircuitComponent.UNEMBED_AT_TOKEN] and "token_id" not in self.run_data:
+            raise ValueError(f"Missing 'token_id' in run_data for component type {self.component}")
+        
+        if self.component == CircuitComponent.UNEMBED:
+            print(f"Calling unembed for token {self.run_data}")  # debugging, remove later
+            return self.circuit_lens.get_unembed_lens(
+                self.run_data["token_id"], self.run_data["seq_index"], **kwargs
             )
-        elif self.run_type == "z_feature_head_seq":
-            return self.web.get_head_seq_lens_for_z_feature(
+        
+        elif self.component == CircuitComponent.UNEMBED_AT_TOKEN:
+            print(f"Calling unembed for token {self.run_data}")
+            return self.circuit_lens.get_unembed_lens(
+                self.run_data["token_id"], self.run_data["seq_index"], **kwargs
+            )
+        
+        elif self.component == CircuitComponent.Z_FEATURE:
+            print(f"Calling z feature for {self.run_data}")
+            return self.circuit_lens.get_head_seq_lens_for_z_feature(
                 self.run_data["layer"],
                 self.run_data["seq_index"],
                 self.run_data["feature"],
                 **kwargs,
             )
-        elif self.run_type == "head":
+        
+        elif self.component == CircuitComponent.ATTN_HEAD:
+            print(f"Calling attn head for {self.run_data}")
             if head_type is None:
                 head_type = "q"
 
             if head_type == "q":
-                return self.web.get_q_lens_on_head_seq(
+                print(f"Calling q lens for {self.run_data}")
+                return self.circuit_lens.get_q_lens_on_head_seq(
                     self.run_data["layer"],
                     self.run_data["head"],
                     self.run_data["source_index"],
@@ -331,7 +412,8 @@ class ComponentLens:
                     **kwargs,
                 )
             elif head_type == "k":
-                return self.web.get_k_lens_on_head_seq(
+                print(f"Calling k lens for {self.run_data}")
+                return self.circuit_lens.get_k_lens_on_head_seq(
                     self.run_data["layer"],
                     self.run_data["head"],
                     self.run_data["source_index"],
@@ -339,20 +421,25 @@ class ComponentLens:
                     **kwargs,
                 )
             elif head_type == "v":
-                return self.web.get_v_lens_at_seq(
+                print(f"Calling v lens for {self.run_data}")
+                return self.circuit_lens.get_v_lens_at_seq(
                     self.run_data["layer"],
                     self.run_data["head"],
                     self.run_data["source_index"],
                     self.run_data["feature"],
                     **kwargs,
                 )
-        elif self.run_type == "mlp":
-            return self.web.get_mlp_feature_lens_at_seq(
+            
+        elif self.component == CircuitComponent.MLP_FEATURE:
+            print(f"Calling mlp feature for {self.run_data}")
+            return self.circuit_lens.get_mlp_feature_lens_at_seq(
                 self.run_data["layer"],
                 self.run_data["seq_index"],
                 self.run_data["feature"],
                 **kwargs,
             )
+
+        return []
 
 
 model_encoder_cache: Optional[Tuple[HookedTransformer, Any, Any]] = None
@@ -667,14 +754,15 @@ class CircuitLens:
 
             lens_runs.append(
                 ComponentLens(
-                    web=self,
+                    circuit_lens=self,
+                    component=CircuitComponent.ATTN_HEAD,
                     run_data={
-                        "run_type": "head",
                         "layer": layer,
                         "head": head,
                         "source_index": source,
                         "feature": feature,
                         "destination_index": seq_index,
+                        "run_type": CircuitComponent.ATTN_HEAD,
                     },
                 )
             )

@@ -79,6 +79,24 @@ px.histogram(cos.max(dim=-1).values.cpu().detach().float()).show()
 
 # %%
 unembed_children = circuit_lens.get_unembed_lens_for_prompt_token(-2)
+print(unembed_children)
+
+# %%
+uu = unembed_children[2]()
+print(uu)
+
+# %%
+q = uu[0]('v')
+
+# %%
+b = q[2]()
+
+# %%
+b[0]()
+
+
+
+
 
 # %%
 uu = unembed_children[1]()
