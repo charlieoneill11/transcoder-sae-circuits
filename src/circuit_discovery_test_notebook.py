@@ -3,17 +3,20 @@
 %autoreload 2
 
 # %%
+
 from example_prompts import SUCCESSOR_EXAMPLE_PROMPT, IOI_EXAMPLE_PROMPT
 from circuit_discovery import CircuitDiscovery, only_feature
 from transformer_lens import HookedTransformer, utils
 from transformer_lens.hook_points import HookPoint
 import torch.nn.functional as F
+from plotly_utils import *
 
 from rich import print as rprint
 from rich.table import Table
 
 import torch
 import time
+import einops
 
 
 # %%
@@ -233,6 +236,135 @@ list(cache.keys())
 
 # %%
 logits.shape
+
+
+# %%
+line(cd.mlp_transcoders[0].W_dec[0].relu())
+
+# %%
+pre_layer = 4
+post_layer = 7
+
+t_pre = cd.mlp_transcoders[pre_layer]
+t_post = cd.mlp_transcoders[post_layer]
+
+t = None
+b = None
+N = 1000
+# N = 1
+feature = 26
+
+
+for i in range(N):
+    # x = t4.W_dec[:100].sum(0)
+    x = 0.5 * (2 * torch.rand_like(t_pre.W_dec[0]) - 1)
+    x /= x.norm()
+    x *= 10
+
+
+    y = 10 * (t_pre.W_dec[feature] / t_pre.W_dec[feature].norm())
+    # print('x norm', x.norm())
+
+    # x = torch.zeros_like(t4.W_dec[1])
+    # x = -t5.b_dec
+    x -= t_post.b_dec
+
+    pre = einops.einsum(
+        x,
+        t_post.W_enc,
+        "d_in, d_in d_sae -> d_sae"
+    ) + t_post.b_enc
+
+    pre_y = einops.einsum(
+        y + x,
+        t_post.W_enc,
+        "d_in, d_in d_sae -> d_sae"
+    ) + t_post.b_enc
+    
+
+    pre_yy = einops.einsum(
+        y,
+        t_post.W_enc,
+        "d_in, d_in d_sae -> d_sae"
+    ) + t_post.b_enc
+
+    # new = (pre_y > 0).float() - (pre > 0).float()
+    # new = pre_yy
+    new = pre
+    # new = ((pre_y.relu() - pre.relu()) > 0).float()
+    # new = pre_y.relu() - pre.relu()
+
+
+    if t is None:
+        t = new
+        # t = pre_y.relu() - pre.relu()
+        # t = pre_y.relu() 
+    else:
+        t += new
+        # t += pre_y.relu() - pre.relu()
+        # t += pre_y.relu() 
+
+
+t = t / N
+
+line(
+    t.relu(),
+    # t,
+    title=f"MLP {pre_layer} (Feature #{feature}) -> MLP {post_layer}",
+    labels={
+        'x': f"MLP {post_layer} Feature",
+        'y': 'Activation'
+    }
+)
+
+# %%
+(pre > 0).float().max()
+
+
+# %%
+t_pre.W_dec[5].norm()
+
+# %%
+(t_pre.W_dec.norm(dim=-1) == 1).sum()
+
+# %%
+t_post.b_dec.norm()
+
+
+
+# %%
+# x = t4.W_dec[:100].sum(0)
+# x /= x.norm()
+# x *= 10000
+# x = 0.5 * (2 * torch.rand_like(t4.W_dec[0]) - 1)
+
+
+x = t_pre.W_dec[:100].sum(0)
+# x = torch.zeros_like(t4.W_dec[1])
+# x = -t5.b_dec
+# x -= t5.b_dec
+
+# x = t4.W_dec[1]
+
+(print(x.shape))
+
+pre = einops.einsum(
+    x,
+    t_post.W_enc,
+    "d_in, d_in d_sae -> d_sae"
+) + t_post.b_enc
+
+line(pre.relu())
+
+
+# %%
+line(t_post.b_enc.relu())
+
+# %%
+x.shape
+
+# %%
+torch.rand_like(x).max()
 
 
 # %%
