@@ -68,6 +68,18 @@ class GatedSAE(nn.Module):
         loss = mse_loss + l1_loss + aux_loss
 
         return sae_out, loss, mse_loss
+    
+    def encoder(self, x_act):
+        hidden_pre = einops.einsum(x_act, self.W_enc, "... d_in, d_in d_sae -> ... d_sae")
+
+        # Gated SAE
+        hidden_pre_mag = hidden_pre * torch.exp(self.r_mag) + self.b_mag
+        hidden_post_mag = self.activation_fn(hidden_pre_mag)  
+        hidden_pre_gate = hidden_pre + self.b_gate
+        hidden_post_gate = (torch.sign(hidden_pre_gate) + 1) / 2
+        hidden_post = hidden_post_mag * hidden_post_gate
+
+        return hidden_post
 
     def per_item_mse_loss_with_target_norm(self, preds, target):
         return torch.nn.functional.mse_loss(preds, target, reduction='none')
