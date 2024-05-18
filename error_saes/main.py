@@ -51,32 +51,54 @@ class GatedSAEDataset(Dataset):
     def __getitem__(self, idx: int) -> Tuple[Tensor, Tensor]:
         return self.original_z[idx], self.sae_errors[idx]
 
+# def create_tokenized_dataset():
+#     print("Creating tokenized dataset...")
+#     model_name = 'gpt2-small'
+#     dataset = load_dataset("NeelNanda/pile-10k")
+
+#     dataset = load_dataset("apollo-research/monology-pile-uncopyrighted-tokenizer-gpt2", streaming=True)
+#     print("Dataset loaded.")
+    
+#     seq_len = 128
+#     model = HookedTransformer.from_pretrained(model_name, device='cpu')
+    
+#     tokenized_dataset = []
+#     text = " ".join(dataset['train']['text'])
+    
+#     for i in trange(0, len(text)//100, 2500):
+#         tokens = model.to_tokens(text[i:i+2500]).squeeze()
+#         for j in range(0, len(tokens), seq_len):
+#             tokenized_dataset.append(tokens[j:j+seq_len])
+    
+#     tokenized_dataset = [x for x in tokenized_dataset if len(x) == seq_len]
+#     print(f"Length of tokenised dataset = {len(tokenized_dataset)}")
+    
+#     for i, tokens in enumerate(tokenized_dataset):
+#         assert tokens.shape[0] == seq_len, f"Token {i} has shape {tokens.shape}"
+    
+#     tokenized_dataset = torch.stack(tokenized_dataset)
+#     torch.save(tokenized_dataset, 'data/tokenized_dataset.pt')
+#     print(f"Tokenized dataset with {len(tokenized_dataset)} examples with {seq_len} tokens saved to 'data/tokenized_dataset.pt'.")
+
 def create_tokenized_dataset():
     print("Creating tokenized dataset...")
-    model_name = 'gpt2-small'
-    dataset = load_dataset("NeelNanda/pile-10k")
+    dataset = load_dataset("apollo-research/monology-pile-uncopyrighted-tokenizer-gpt2", streaming=True)
     print("Dataset loaded.")
-    
+    # Get the first 1000 examples
+    data_iter = iter(dataset['train'])
+    input_ids_list = []
     seq_len = 128
-    model = HookedTransformer.from_pretrained(model_name, device='cpu')
-    
-    tokenized_dataset = []
-    text = " ".join(dataset['train']['text'])
-    
-    for i in trange(0, len(text)//100, 2500):
-        tokens = model.to_tokens(text[i:i+2500]).squeeze()
-        for j in range(0, len(tokens), seq_len):
-            tokenized_dataset.append(tokens[j:j+seq_len])
-    
-    tokenized_dataset = [x for x in tokenized_dataset if len(x) == seq_len]
-    print(f"Length of tokenised dataset = {len(tokenized_dataset)}")
-    
-    for i, tokens in enumerate(tokenized_dataset):
-        assert tokens.shape[0] == seq_len, f"Token {i} has shape {tokens.shape}"
-    
-    tokenized_dataset = torch.stack(tokenized_dataset)
+    for i in tqdm(range(125000)):
+        example = next(data_iter)
+        input_ids = example['input_ids']
+        # Split this list into chunks of 128
+        for j in range(0, len(input_ids), seq_len):
+            input_ids_list.append(torch.tensor(input_ids[j:j+seq_len]))
+
+    # Stack the input_ids
+    tokenized_dataset = torch.stack(input_ids_list)
+    print(f"Tokenized dataset has shape {tokenized_dataset.shape}")
     torch.save(tokenized_dataset, 'data/tokenized_dataset.pt')
-    print(f"Tokenized dataset with {len(tokenized_dataset)} examples with {seq_len} tokens saved to 'data/tokenized_dataset.pt'.")
 
 def get_z_activations(model, dataloader, layer):
     z_acts = []
@@ -111,6 +133,10 @@ def create_dataloaders(dataset: Dataset, batch_size: int, train_split: float = 0
 
     train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
     test_dataloader = DataLoader(test_dataset, batch_size=batch_size, shuffle=True)
+
+    # Save the datasets
+    torch.save(train_dataset, 'data/train_dataset.pt')
+    torch.save(test_dataset, 'data/test_dataset.pt')
 
     return train_dataloader, test_dataloader
 
@@ -149,6 +175,7 @@ def evaluate_model(model: Union[GatedSAE, SparseAutoencoder], dataloader: DataLo
     return avg_loss, avg_recon_loss, avg_l0_loss
 
 def main(layer: int, model_type: str, n_epochs: int, l1_coefficient: float, batch_size: int, lr: float, repo_name: str):
+    torch.set_grad_enabled(False)
     print(f"Running on {device}...")
 
     if not os.path.exists('data/tokenized_dataset.pt'):
@@ -158,7 +185,8 @@ def main(layer: int, model_type: str, n_epochs: int, l1_coefficient: float, batc
     sae = z_saes[layer]
 
     tokenized_dataset = torch.load('data/tokenized_dataset.pt')
-    print(f"Length of tokenised dataset = {len(tokenized_dataset)}")
+    print(f"Shape of tokenised dataset = {tokenized_dataset.shape}")
+    tokenized_dataset = tokenized_dataset[:1000, :]
     dataset = TokenizedDataset(tokenized_dataset)
     dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
 
@@ -171,7 +199,6 @@ def main(layer: int, model_type: str, n_epochs: int, l1_coefficient: float, batc
         torch.set_grad_enabled(False)
         z_acts = get_z_activations(model, dataloader, layer)
         torch.save(z_acts, z_acts_path)
-        torch.set_grad_enabled(True)
     else:
         print(f"Loading existing Z activations for layer {layer}...")
         z_acts = torch.load(z_acts_path)
@@ -192,6 +219,7 @@ def main(layer: int, model_type: str, n_epochs: int, l1_coefficient: float, batc
     n_input_features = 768
     projection_up = 8
 
+    torch.set_grad_enabled(True)
     if model_type == 'gated':
         model = GatedSAE(n_input_features=n_input_features, n_learned_features=n_input_features * projection_up, l1_coefficient=l1_coefficient)
     else:
@@ -218,7 +246,7 @@ if __name__ == '__main__':
     parser.add_argument('--layer', type=int, required=True, help='Layer number to train the SAE on')
     parser.add_argument('--model_type', type=str, default='gated', choices=['gated', 'vanilla'], help='Type of SAE model to train')
     parser.add_argument('--n_epochs', type=int, default=5, help='Number of training epochs')
-    parser.add_argument('--l1_coefficient', type=float, default=1e-4, help='L1 regularisation coefficient')
+    parser.add_argument('--l1_coefficient', type=float, default=3e-4, help='L1 regularisation coefficient')
     parser.add_argument('--batch_size', type=int, default=64, help='Batch size for training')
     parser.add_argument('--lr', type=float, default=0.001, help='Learning rate for training')
     parser.add_argument('--repo_name', type=str, default="error-saes", help='HuggingFace repository name to save the model')
