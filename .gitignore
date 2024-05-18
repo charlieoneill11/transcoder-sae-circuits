@@ -4,3 +4,4 @@ wandb
 .pytest_cache
 src/z_acts.pt
 error_saes/data
+error_saes/error-saes
