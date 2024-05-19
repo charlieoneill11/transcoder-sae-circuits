@@ -176,7 +176,11 @@ torch.allclose(pattern, lens.cache['pattern', 0])
 
 model = HookedTransformer.from_pretrained("gpt2-small", center_writing_weights=False)
 # %%
-unembed_children = circuit_lens.get_unembed_lens_for_prompt_token(0, visualize=True)
+unembed_children, *_ = circuit_lens.get_unembed_lens_for_prompt_token(-2, visualize=True)
+
+# %%
+_ = unembed_children[0][0]()
+
 
 # %%
 (1, 2, (3, 4)) == (1, 2, (3, 4))

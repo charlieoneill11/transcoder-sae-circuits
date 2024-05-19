@@ -34,6 +34,10 @@ class LayerKey(TypedDict):
     attn: int
 
 
+BIAS_OFFSET = 0
+Z_ERROR_OFFSET = 1
+Z_BIAS_OFFSET = 2
+
 NUM_ATTN_AUXILARY_FEATURES = 3
 NUM_MLP_AUXILARY_FEATURES = 2
 
@@ -70,6 +74,11 @@ class ActiveFeatures:
             max_index += self.keys[layer]["attn"] + NUM_ATTN_AUXILARY_FEATURES
 
         return self.vectors[:max_index]
+
+    def get_z_error(self, layer: int):
+        error_index = self.get_attn_start_index(layer) + Z_ERROR_OFFSET
+
+        return self.vectors[error_index]
 
     @property
     def max_active_features(self):
@@ -385,7 +394,9 @@ class ComponentLens:
     def feature(self):
         return self.run_data.get("feature", -1)
 
-    def __call__(self, head_type=None, **kwargs) -> List[ComponentLensWithValue]:
+    def __call__(
+        self, head_type=None, **kwargs
+    ) -> Tuple[List[ComponentLensWithValue], Optional[ActiveFeatures]]:
         if self.component == CircuitComponent.UNEMBED:
             return self.circuit_lens.get_unembed_lens(
                 self.run_data["token_id"], self.run_data["seq_index"], **kwargs
@@ -399,12 +410,25 @@ class ComponentLens:
                 int(token_i), self.run_data["seq_index"], **kwargs
             )
         elif self.component == CircuitComponent.Z_FEATURE:
-            return self.circuit_lens.get_head_seq_lens_for_z_feature(
-                self.run_data["layer"],
-                self.run_data["seq_index"],
-                self.run_data["feature"],
-                **kwargs,
+            return (
+                self.circuit_lens.get_head_seq_lens_for_z_feature(
+                    self.run_data["layer"],
+                    self.run_data["seq_index"],
+                    self.run_data["feature"],
+                    **kwargs,
+                ),
+                None,
             )
+        elif self.component == CircuitComponent.Z_SAE_ERROR:
+            return (
+                self.circuit_lens.get_head_seq_lens_for_z_error(
+                    self.run_data["layer"],
+                    self.run_data["seq_index"],
+                    **kwargs,
+                ),
+                None
+            )
+
         elif self.component == CircuitComponent.ATTN_HEAD:
             if head_type is None:
                 head_type = "q"
@@ -441,7 +465,7 @@ class ComponentLens:
                 **kwargs,
             )
 
-        return []
+        return [], None
 
 
 model_encoder_cache: Optional[Tuple[HookedTransformer, Any, Any]] = None
@@ -651,7 +675,10 @@ class CircuitLens:
 
             pprint(active_features.get_top_k_labels(activations, k=k))
 
-        return active_features.get_top_k_lens_runs(activations, self, seq_index, k=k)
+        return (
+            active_features.get_top_k_lens_runs(activations, self, seq_index, k=k),
+            active_features,
+        )
 
     def get_unembed_lens_for_prompt_token(self, seq_index: int, visualize=True, k=None):
         """
@@ -711,13 +738,12 @@ class CircuitLens:
             k=k,
         )
 
-    def get_head_seq_activations_for_z_feature(
-        self, layer: int, seq_index: int, feature: int
+    def get_head_seq_activations_for_vector(
+        self, layer: int, seq_index: int, vector: Float[Tensor, "n_head d_head"]
     ):
         seq_index = self.process_seq_index(seq_index)
         v = self.cache["v", layer]
         pattern = self.cache["pattern", layer]
-        encoder = self.z_saes[layer]
 
         pre_z = einops.einsum(
             v,
@@ -725,22 +751,63 @@ class CircuitLens:
             "b p_seq n_head d_head, b n_head seq p_seq -> seq b p_seq n_head d_head",
         )[seq_index, 0]
 
-        better_w_enc = einops.rearrange(
-            encoder.W_enc, "(n_head d_head) feature -> n_head d_head feature", n_head=12
-        )[:, :, feature]
+        # better_w_enc = einops.rearrange(
+        #     encoder.W_enc, "(n_head d_head) feature -> n_head d_head feature", n_head=12
+        # )[:, :, feature]
 
         feature_act = einops.einsum(
-            pre_z, better_w_enc, "seq n_head d_head, n_head d_head -> n_head seq"
+            pre_z, vector, "seq n_head d_head, n_head d_head -> n_head seq"
         )
 
         return einops.rearrange(feature_act, "n_head seq -> (n_head seq)")
 
-    def get_head_seq_lens_for_z_feature(
-        self, layer: int, seq_index: int, feature: int, visualize=True, k=10
+    def get_head_seq_activations_for_z_feature(
+        self, layer: int, seq_index: int, feature: int
+    ):
+        encoder = self.z_saes[layer]
+
+        better_w_enc = einops.rearrange(
+            encoder.W_enc, "(n_head d_head) feature -> n_head d_head feature", n_head=12
+        )[:, :, feature]
+
+        return self.get_head_seq_activations_for_vector(layer, seq_index, better_w_enc)
+
+        # seq_index = self.process_seq_index(seq_index)
+        # v = self.cache["v", layer]
+        # pattern = self.cache["pattern", layer]
+        # encoder = self.z_saes[layer]
+
+        # pre_z = einops.einsum(
+        #     v,
+        #     pattern,
+        #     "b p_seq n_head d_head, b n_head seq p_seq -> seq b p_seq n_head d_head",
+        # )[seq_index, 0]
+
+        # better_w_enc = einops.rearrange(
+        #     encoder.W_enc, "(n_head d_head) feature -> n_head d_head feature", n_head=12
+        # )[:, :, feature]
+
+        # feature_act = einops.einsum(
+        #     pre_z, better_w_enc, "seq n_head d_head, n_head d_head -> n_head seq"
+        # )
+
+        # return einops.rearrange(feature_act, "n_head seq -> (n_head seq)")
+
+    def get_head_seq_lens_for_activations(
+        self,
+        feature_act,
+        layer: int,
+        seq_index: int,
+        feature: int,
+        visualize=True,
+        k=10,
     ) -> List[ComponentLensWithValue]:
-        feature_act = self.get_head_seq_activations_for_z_feature(
-            layer, seq_index, feature
-        )
+        """
+        If `feature` is -1, then we're analyzing the SAE error 
+        """
+        # feature_act = self.get_head_seq_activations_for_z_feature(
+        #     layer, seq_index, feature
+        # )
 
         # feature_act /= feature_act.sum()
         feature_act = self.normalize_activations(feature_act)
@@ -785,7 +852,7 @@ class CircuitLens:
                     f"{token}/{i}"
                     for (i, token) in enumerate(self.model.to_str_tokens(self.prompt))
                 ],
-                title=f"Layer {layer} Head/Seq Feature {feature} at '{self.get_str_token_at_seq(seq_index)}'::{seq_index}",
+                title=f"Layer {layer} Head/Seq {f'Feature {feature}' if feature >= 0 else 'Z Error'} at '{self.get_str_token_at_seq(seq_index)}'::{seq_index}",
                 labels={"x": "Token", "y": "Head"},
             )
 
@@ -800,6 +867,95 @@ class CircuitLens:
             )
 
         return lens_runs
+
+    def get_head_seq_lens_for_z_feature(
+        self, layer: int, seq_index: int, feature: int, visualize=True, k=10
+    ) -> List[ComponentLensWithValue]:
+
+        feature_act = self.get_head_seq_activations_for_z_feature(
+            layer, seq_index, feature
+        )
+
+        return self.get_head_seq_lens_for_activations(
+            feature_act, layer, seq_index, feature, visualize=visualize, k=k
+        )
+
+        # # feature_act /= feature_act.sum()
+        # feature_act = self.normalize_activations(feature_act)
+
+        # values, indices = feature_act.topk(k=k)
+
+        # lens_runs = []
+        # vis_list = []
+
+        # for index, value in zip(indices.tolist(), values.tolist()):
+        #     head = index // self.n_tokens
+        #     source = index % self.n_tokens
+
+        #     lens_runs.append(
+        #         (
+        #             ComponentLens(
+        #                 circuit_lens=self,
+        #                 component=CircuitComponent.ATTN_HEAD,
+        #                 run_data={
+        #                     "layer": layer,
+        #                     "head": head,
+        #                     "source_index": source,
+        #                     "feature": feature,
+        #                     "destination_index": seq_index,
+        #                 },
+        #             ),
+        #             value,
+        #         )
+        #     )
+
+        #     if visualize:
+        #         vis_list.append((head, source, seq_index, value))
+
+        # if visualize:
+        #     vis = einops.rearrange(
+        #         feature_act, "(n_head seq) -> n_head seq", n_head=self.model.cfg.n_heads
+        #     )
+
+        #     imshow(
+        #         vis,
+        #         x=[
+        #             f"{token}/{i}"
+        #             for (i, token) in enumerate(self.model.to_str_tokens(self.prompt))
+        #         ],
+        #         title=f"Layer {layer} Head/Seq Feature {feature} at '{self.get_str_token_at_seq(seq_index)}'::{seq_index}",
+        #         labels={"x": "Token", "y": "Head"},
+        #     )
+
+        #     pprint(
+        #         [
+        #             f"Head {head} "
+        #             + f"| Source: {self.model.tokenizer.decode([self.tokens[0, source]])}::{source} "
+        #             + f"| Destination: {self.model.tokenizer.decode([self.tokens[0, dest]])}::{dest} "
+        #             + f"| Contribution: {value * 100:.3g}%"
+        #             for (head, source, dest, value) in vis_list
+        #         ]
+        #     )
+
+        # return lens_runs
+
+    def get_head_seq_lens_for_z_error(
+        self, layer: int, seq_index: int, visualize=True, k=10
+    ):
+        seq_index = self.process_seq_index(seq_index)
+
+        error_vector = self.get_active_features(layer).get_z_error(layer)
+        error_vector = einops.rearrange(
+            error_vector, "(n_head d_head) -> n_head d_head", n_head=12
+        )
+
+        feature_act = self.get_head_seq_activations_for_vector(
+            layer, seq_index, error_vector
+        )
+
+        return self.get_head_seq_lens_for_activations(
+            feature_act, layer, seq_index, -1, visualize=visualize, k=k
+        )
 
     def get_mlp_feature_lens_at_seq(
         self,

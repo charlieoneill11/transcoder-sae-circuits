@@ -362,6 +362,8 @@ class TransformerAnalysisModel(AnalysisObject):
 
 
 class CircuitDiscoveryNode:
+    component_lens: ComponentLens
+
     def __init__(
         self, component_lens: ComponentLens, circuit_discovery: "CircuitDiscovery"
     ):
@@ -400,7 +402,9 @@ class CircuitDiscoveryRegularNode(CircuitDiscoveryNode):
     @property
     def top_k_contributors(self) -> List[ComponentLensWithValue]:
         if self._top_k_contributors is None:
-            self._top_k_contributors = self.component_lens(visualize=False, k=self.k)
+            self._top_k_contributors, *_ = self.component_lens(
+                visualize=False, k=self.k
+            )
 
         return self._top_k_contributors
 
@@ -474,7 +478,7 @@ class CircuitDiscoveryHeadNode(CircuitDiscoveryNode):
         self._validate_head_type(head_type)
 
         if head_type not in self._top_k_contributors:
-            self._top_k_contributors[head_type] = self.component_lens(
+            self._top_k_contributors[head_type], *_ = self.component_lens(
                 head_type=head_type, visualize=False, k=self.k
             )
 
