@@ -22,12 +22,54 @@ from circuit_lens import get_model_encoders
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
+# Function to track neuron activity
+def track_neuron_activity(hidden_post, neuron_activity, step):
+    with torch.no_grad():
+        fired_neurons = (hidden_post != 0).float().sum(dim=0)
+        neuron_activity[step % 25000] = fired_neurons
+
+# Function to resample neurons
+def resample_neurons(model, neuron_activity, optimizer):
+    with torch.no_grad():
+        total_steps = neuron_activity.shape[0]
+        fired_counts = neuron_activity.sum(dim=0)
+        firing_rates = fired_counts / total_steps
+        dead_neurons = firing_rates < 1e-7
+
+        if dead_neurons.sum() == 0:
+            return
+
+        # Kaiming Uniform initialization for dead neurons
+        kaiming_init = torch.nn.init.kaiming_uniform_
+
+        # Reinitialize encoder weights for dead neurons
+        model.W_enc[:, dead_neurons] = kaiming_init(model.W_enc[:, dead_neurons])
+
+        # Reinitialize decoder weights for dead neurons
+        model.W_dec.weight[dead_neurons, :] = kaiming_init(model.W_dec.weight[dead_neurons, :])
+
+        # Reset biases for dead neurons
+        model.b_mag[dead_neurons] = 0
+        model.b_gate[dead_neurons] = 0
+        model.W_dec.bias[dead_neurons] = 0
+
+        # Reset optimizer parameters for dead neurons
+        for group in optimizer.param_groups:
+            for p in group['params']:
+                if p.grad is not None:
+                    state = optimizer.state[p]
+                    if 'exp_avg' in state:
+                        state['exp_avg'][dead_neurons] = 0
+                    if 'exp_avg_sq' in state:
+                        state['exp_avg_sq'][dead_neurons] = 0
+
 def get_z_activations(model, batch, layer):
-    logits, cache = model.run_with_cache(batch)
-    z = cache["z", layer]
-    del logits
-    del cache
-    z = einops.rearrange(z, "b s n d -> (b s) (n d)")
+    with torch.no_grad():
+        logits, cache = model.run_with_cache(batch)
+        z = cache["z", layer]
+        del logits
+        del cache
+        z = einops.rearrange(z, "b s n d -> (b s) (n d)")
     return z
 
 def get_sae_errors(sae, z_batch):
@@ -42,15 +84,20 @@ def train_model(model: Union[GatedSAE, SparseAutoencoder], tl_model, sae, n_batc
     optimizer = optim.Adam(model.parameters(), lr=lr)
     model = model.to(device)
     sae = sae.to(device)
+
+    # Initialize neuron activity tracker
+    neuron_activity = torch.zeros((25000, model.n_learned_features), device=device)
+    total_steps = 0
+
     initial_test_loss, initial_recon_loss, initial_l0_loss, initial_dead_neurons = evaluate_model(model, tl_model, activation_store, layer, sae)
     print(f"Initial Test Loss {initial_test_loss:.4f} | Initial Reconstruction Error {initial_recon_loss:.4f} | Initial L0 Loss {initial_l0_loss:.4f} | Initial Dead Neurons: {initial_dead_neurons:.2f}%")
     
     # Log initial metrics
     wandb.log({
-        "initial_test_loss": initial_test_loss,
-        "initial_recon_loss": initial_recon_loss,
-        "initial_l0_loss": initial_l0_loss,
-        "initial_dead_neurons": initial_dead_neurons
+        "test_loss": initial_test_loss,
+        "recon_loss": initial_recon_loss,
+        "l0_loss": initial_l0_loss,
+        "dead_neurons": initial_dead_neurons
     })
 
     for batch_num in trange(n_batches, desc='Training Batches'):
@@ -59,26 +106,35 @@ def train_model(model: Union[GatedSAE, SparseAutoencoder], tl_model, sae, n_batc
         z_acts = get_z_activations(tl_model, batch_tokens, layer)
         sae_errors = get_sae_errors(sae, z_acts)
         optimizer.zero_grad()
-        _, loss, _ = model(z_acts, sae_errors)
+        sae_out, loss, _ = model(z_acts, sae_errors)
         loss.backward()
         optimizer.step()
+
+        # Track neuron activity
+        track_neuron_activity(model.encoder(z_acts), neuron_activity, total_steps)
+        total_steps += batch_size
+
         # Clear cache
         del z_acts
         del sae_errors
         del batch_tokens
         torch.cuda.empty_cache()
         
-        test_loss, recon_loss, l0_loss, dead_neurons = evaluate_model(model, tl_model, activation_store, layer, sae)
-        print(f"Batch {batch_num + 1} Test Loss {test_loss:.4f} | Reconstruction Error {recon_loss:.4f} | L0 Loss {l0_loss:.4f} | Dead Neurons: {dead_neurons:.2f}%")
+        if (batch_num + 1) % 25 == 0:
+            test_loss, recon_loss, l0_loss, dead_neurons = evaluate_model(model, tl_model, activation_store, layer, sae)
+            print(f"Batch {batch_num + 1} Test Loss {test_loss:.4f} | Reconstruction Error {recon_loss:.4f} | L0 Loss {l0_loss:.4f} | Dead Neurons: {dead_neurons:.2f}%")
 
-        # Log metrics
-        wandb.log({
-            "batch": batch_num + 1,
-            "test_loss": test_loss,
-            "recon_loss": recon_loss,
-            "l0_loss": l0_loss,
-            "dead_neurons": dead_neurons
-        })
+            # Log metrics
+            wandb.log({
+                "test_loss": test_loss,
+                "recon_loss": recon_loss,
+                "l0_loss": l0_loss,
+                "dead_neurons": dead_neurons
+            })
+
+        # Resample neurons at specific training steps
+        if total_steps in {50000, 100000, 150000, 200000}:
+            resample_neurons(model, neuron_activity, optimizer)
 
         # Save and upload the model every 1000 batches
         if (batch_num + 1) % 1000 == 0:
@@ -188,10 +244,12 @@ def main(layer: int, model_type: str, n_batches: int, l1_coefficient: float, bat
     sparse_autoencoder = saes[hook_point]
     sparse_autoencoder.to(device)
     sparse_autoencoder.cfg.device = device
-    sparse_autoencoder.cfg.store_batch_size = 4
     sparse_autoencoder.cfg.hook_point = f"blocks.{layer}.attn.hook_z"
+    sparse_autoencoder.cfg.store_batch_size = batch_size
 
     loader = LMSparseAutoencoderSessionloader(sparse_autoencoder.cfg)
+
+    print(f"Loader cfg batch size = {sparse_autoencoder.cfg.store_batch_size} (batch size = {batch_size})")
 
     # don't overwrite the sparse autoencoder with the loader's sae (newly initialized)
     tl_model, _, activation_store = loader.load_sae_training_group_session()
@@ -221,13 +279,16 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Train and Save Gated SAE for Transformer Layers")
     parser.add_argument('--layer', type=int, required=True, help='Layer number to train the SAE on')
     parser.add_argument('--model_type', type=str, default='gated', choices=['gated', 'vanilla'], help='Type of SAE model to train')
-    parser.add_argument('--n_batches', type=int, default=500, help='Number of training batches')
-    parser.add_argument('--l1_coefficient', type=float, default=5e-4, help='L1 regularisation coefficient')
-    parser.add_argument('--batch_size', type=int, default=2048, help='Batch size for training')
+    parser.add_argument('--n_batches', type=int, default=5000, help='Number of training batches')
+    parser.add_argument('--l1_coefficient', type=float, default=3e-4, help='L1 regularisation coefficient')
+    parser.add_argument('--batch_size', type=int, default=32, help='Batch size for training')
     parser.add_argument('--lr', type=float, default=0.001, help='Learning rate for training')
-    parser.add_argument('--projection_up', type=int, default=1, help='Factor to increase the number of learned features by')
+    parser.add_argument('--projection_up', type=int, default=32, help='Factor to increase the number of learned features by')
     parser.add_argument('--repo_name', type=str, default="error-saes", help='HuggingFace repository name to save the model')
 
     args = parser.parse_args()
+
+    # Print total number of tokens we will train for = batch_size * n_batches * 128
+    print(f"Total number of tokens we will train for: {args.batch_size * args.n_batches * 128}")
 
     main(args.layer, args.model_type, args.n_batches, args.l1_coefficient, args.batch_size, args.lr, args.projection_up, args.repo_name)
