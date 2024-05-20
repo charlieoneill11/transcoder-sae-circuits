@@ -30,4 +30,8 @@ echo "conda activate circuits-env" >> ~/.bashrc
 # Activate the Conda environment
 source ~/miniconda3/bin/activate circuits-env
 
+# Install the required packages
 pip install -r requirements.txt
+
+# Install graphviz
+sudo apt install graphviz

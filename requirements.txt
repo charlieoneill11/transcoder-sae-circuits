@@ -30,6 +30,7 @@ typeguard
 torchinfo
 torchvision
 frozendict
+graphviz
 openai==0.28
 transformer_lens
 autorom[accept-rom-license]
