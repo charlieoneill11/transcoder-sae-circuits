@@ -29,21 +29,6 @@ class CircuitComponent:
     TRANSCODER_BIAS = "transcoder_bias"
 
 
-class CircuitComponent:
-    Z_FEATURE = "z_feature"
-    MLP_FEATURE = "mlp_feature"
-    ATTN_HEAD = "attn_head"
-    UNEMBED = "unembed"
-    UNEMBED_AT_TOKEN = "unembed_at_token"
-    EMBED = "embed"
-    POS_EMBED = "pos_embed"
-    BIAS_O = "b_O"
-    Z_SAE_ERROR = "z_sae_error"
-    Z_SAE_BIAS = "z_sae_bias"
-    TRANSCODER_ERROR = "transcoder_error"
-    TRANSCODER_BIAS = "transcoder_bias"
-
-
 class LayerKey(TypedDict):
     mlp: int
     attn: int
@@ -258,7 +243,6 @@ class ActiveFeatures:
         self,
         activations: Float[Tensor, "comp"],
         circuit_lens: "CircuitLens",
-        circuit_lens: "CircuitLens",
         seq_index: int,
         k=10,
     ) -> List["ComponentLensWithValue"]:
@@ -290,8 +274,6 @@ class ActiveFeatures:
         features = self.get_top_k_features(activations, k=k)
 
         return [
-            f"{kind} | Layer: {layer} | Feature: {feature_i} | Contribution: {value*100:.3g}%"
-            for kind, layer, feature_i, value in features
             f"{kind} | Layer: {layer} | Feature: {feature_i} | Contribution: {value*100:.3g}%"
             for kind, layer, feature_i, value in features
         ]
@@ -446,7 +428,7 @@ class ComponentLens:
                     self.run_data["seq_index"],
                     **kwargs,
                 ),
-                None
+                None,
             )
 
         elif self.component == CircuitComponent.ATTN_HEAD:
@@ -823,7 +805,7 @@ class CircuitLens:
         k=10,
     ) -> List[ComponentLensWithValue]:
         """
-        If `feature` is -1, then we're analyzing the SAE error 
+        If `feature` is -1, then we're analyzing the SAE error
         """
         # feature_act = self.get_head_seq_activations_for_z_feature(
         #     layer, seq_index, feature

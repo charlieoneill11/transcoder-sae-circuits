@@ -37,7 +37,8 @@ cd = CircuitDiscovery(IOI_EXAMPLE_PROMPT, -2, allowed_components_filter=only_fea
 cd.reset_graph()
 # for _ in range(passes):
 #     cd.add_greedy_pass()
-cd.add_greedy_pass(contributors_per_node=2)
+# cd.add_greedy_pass(contributors_per_node=2)
+cd.add_greedy_pass()
 # %%
 
 cd.print_attn_heads_and_mlps_in_graph()
