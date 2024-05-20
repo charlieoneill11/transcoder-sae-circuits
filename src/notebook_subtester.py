@@ -3,7 +3,6 @@
 %autoreload 2
 
 # %%
-
 from circuit_lens import CircuitLens
 
 # %%

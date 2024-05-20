@@ -22,6 +22,9 @@ a.setdefault('a', set()).add(1)
 
 bool([])
 
+# %%
+torch.set_grad_enabled(False)
+
 
 # %%
 G = Digraph()

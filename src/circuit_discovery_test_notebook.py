@@ -250,8 +250,8 @@ t_post = cd.mlp_transcoders[post_layer]
 
 t = None
 b = None
-N = 1000
-# N = 1
+# N = 1000
+N = 1
 feature = 26
 
 
@@ -262,12 +262,17 @@ for i in range(N):
     x *= 10
 
 
-    y = 10 * (t_pre.W_dec[feature] / t_pre.W_dec[feature].norm())
+    y = t_pre.W_dec[feature]
+    # y = t_pre.W_dec[feature:feature + 10000].sum(0)
+    y /= y.norm()
+    y *= 1000 #* (t_pre.W_dec[feature] / t_pre.W_dec[feature].norm())
     # print('x norm', x.norm())
+    print('xy norm', x.norm(), y.norm())
 
     # x = torch.zeros_like(t4.W_dec[1])
     # x = -t5.b_dec
     x -= t_post.b_dec
+    y -= t_post.b_dec
 
     pre = einops.einsum(
         x,
@@ -289,8 +294,8 @@ for i in range(N):
     ) + t_post.b_enc
 
     # new = (pre_y > 0).float() - (pre > 0).float()
-    # new = pre_yy
-    new = pre
+    new = pre_yy
+    # new = pre
     # new = ((pre_y.relu() - pre.relu()) > 0).float()
     # new = pre_y.relu() - pre.relu()
 
