@@ -3,7 +3,6 @@
 %autoreload 2
 
 # %%
-
 from example_prompts import SUCCESSOR_EXAMPLE_PROMPT, IOI_EXAMPLE_PROMPT
 from circuit_discovery import CircuitDiscovery, only_feature
 from transformer_lens import HookedTransformer, utils
@@ -28,8 +27,75 @@ torch.set_grad_enabled(False)
 # %%
 inverse = "Mary and Jeff went to the store, and Jeff gave an apple to Mary"
 
-# cd = CircuitDiscovery(SUCCESSOR_EXAMPLE_PROMPT, -2, allowed_components_filter=only_feature)
-cd = CircuitDiscovery(IOI_EXAMPLE_PROMPT, -2, allowed_components_filter=only_feature)
+IOI_EXAMPLE_PROMPT = "Mary and Jeff went to the store, and Mary gave an apple to Jeff"
+IOI_EXAMPLE_PROMPT = "Allen and Ben went to the store, and Allen gave an apple to Ben"
+# IOI_EXAMPLE_PROMPT = "Donald and Helen went to the store, and Donald gave an apple to Helen"
+" the teller said, 'I don't know if make the bank deposit today because it looks like your account"
+# prompt = " Nolan said.\"So you couldn't really sit and go, 'Okay,you're going to do the Joker,'"
+
+# %%
+
+
+# %%
+
+
+
+
+cd.model.to_str_tokens(prompt)
+# %%
+
+cd = CircuitDiscovery(SUCCESSOR_EXAMPLE_PROMPT, -2, allowed_components_filter=only_feature)
+# cd = CircuitDiscovery(prompt, -2, allowed_components_filter=only_feature)
+
+
+# %%
+prompt = 'the war lasted from 1620 to 1625'
+cd = CircuitDiscovery(prompt, -2, allowed_components_filter=only_feature)
+
+
+
+
+
+
+# %%
+cd.model
+utils.test_prompt("The war lasted from 1620 to 16", '40', cd.model, prepend_space_to_answer=False)
+
+
+# %%
+cd.reset_graph()
+
+p = 4
+c = 1
+for _ in range(p):
+    cd.add_greedy_pass(contributors_per_node=c)
+
+cd.print_attn_heads_and_mlps_in_graph()
+
+# %%
+cd.visualize_graph(begin_layer=0)
+
+# %%
+cd.visualize_graph_performance_against_base_ablation(head_ablation_style="zero")
+
+
+# %%
+sorted([str(n) for n in cd.transformer_model.discovery_node_cache])
+
+# %%
+cd.component_lens_at_loc([0, 0, 0, 0, 0])
+
+# %%
+cd.visualize_attn_heads_in_graph()
+
+
+
+
+# %%
+cd.component_lens_at_loc([])
+
+
+
 
 # %%
 # passes = 3
@@ -45,8 +111,7 @@ cd.print_attn_heads_and_mlps_in_graph()
 
 
 # %%
-
-cd.visualize_current_graph_performance(
+cd.visualize_graph_performance_against_base_ablation(
     head_ablation_type="bos", 
     # head_ablation_type="zero", 
     # include_all_heads=True,
@@ -92,7 +157,7 @@ cache['v', 0].shape
 
 
 # %%
-gl = cd.get_logits_for_current_graph()
+gl = cd.get_logits_for_graph()
 
 # %%
 a = [4, 1, 2, 3]
@@ -374,3 +439,141 @@ torch.rand_like(x).max()
 
 
 # %%
+names = [
+    "abduction",
+    "accord",
+    "affair",
+    "agreement",
+    "appraisal",
+    "assaults",
+    "assessment",
+    "attack",
+    "attempts",
+    "campaign",
+    "captivity",
+    "case",
+    "challenge",
+    "chaos",
+    "clash",
+    "collaboration",
+    "coma",
+    "competition",
+    "confrontation",
+    "consequence",
+    "conspiracy",
+    "construction",
+    "consultation",
+    "contact",
+    "contract",
+    "convention",
+    "cooperation",
+    "custody",
+    "deal",
+    "decline",
+    "decrease",
+    "demonstrations",
+    "development",
+    "disagreement",
+    "disorder",
+    "dispute",
+    "domination",
+    "dynasty",
+    "effect",
+    "effort",
+    "employment",
+    "endeavor",
+    "engagement",
+    "epidemic",
+    "evaluation",
+    "exchange",
+    "existence",
+    "expansion",
+    "expedition",
+    "experiments",
+    "fall",
+    "fame",
+    "flights",
+    "friendship",
+    "growth",
+    "hardship",
+    "hostility",
+    "illness",
+    "impact",
+    "imprisonment",
+    "improvement",
+    "incarceration",
+    "increase",
+    "insurgency",
+    "invasion",
+    "investigation",
+    "journey",
+    "kingdom",
+    "marriage",
+    "modernization",
+    "negotiation",
+    "notoriety",
+    "obstruction",
+    "operation",
+    "order",
+    "outbreak",
+    "outcome",
+    "overhaul",
+    "patrols",
+    "pilgrimage",
+    "plague",
+    "plan",
+    "practice",
+    "process",
+    "program",
+    "progress",
+    "project",
+    "pursuit",
+    "quest",
+    "raids",
+    "reforms",
+    "reign",
+    "relationship",
+    "retaliation",
+    "riot",
+    "rise",
+    "rivalry",
+    "romance",
+    "rule",
+    "sanctions",
+    "shift",
+    "siege",
+    "slump",
+    "stature",
+    "stint",
+    "strikes",
+    "study",
+    "test",
+    "testing",
+    "tests",
+    "therapy",
+    "tour",
+    "tradition",
+    "treaty",
+    "trial",
+    "trip",
+    "unemployment",
+    "voyage",
+    "warfare",
+    "work",
+]
+
+# %%
+[n for n in names if len(cd.model.to_str_tokens(n, prepend_bos=False)) == 1]
+
+# %%
+cd.model.to_str_tokens(names[0], prepend_bos=False)
+
+# %%
+prompt = 'the war lasted from 1620 to 16'
+
+cd.model.generate(prompt, max_new_tokens=1, do_sample=False)
+
+
+
+# %%
+int("10")

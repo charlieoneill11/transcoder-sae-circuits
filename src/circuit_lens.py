@@ -504,6 +504,9 @@ class CircuitLens:
         self.prompt = prompt
         self.tokens = self.model.to_tokens(prompt)
 
+        if self.tokens.size(0) != 1:
+            raise ValueError("Can only do CircuitLens on a single prompt!")
+
         self.logits, self.cache = self.model.run_with_cache(
             self.tokens, return_type="logits"
         )
@@ -544,7 +547,7 @@ class CircuitLens:
         values = [torch.stack([t1, t1])]
         features = [torch.stack([t0, t0])]
 
-        for layer in trange(self.model.cfg.n_layers):
+        for layer in range(self.model.cfg.n_layers):
             # First handle attention
             z_sae = self.z_saes[layer]
 

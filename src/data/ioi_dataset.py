@@ -14,6 +14,64 @@ import matplotlib.pyplot as plt
 import random as rd
 import copy
 
+from data.eval_dataset import EvalItem
+
+SINGLE_TOKEN_NAMES = [
+    "Michael",
+    "Christopher",
+    "Jessica",
+    "Matthew",
+    "Jennifer",
+    "Joshua",
+    "Daniel",
+    "David",
+    "James",
+    "Robert",
+    "John",
+    "Joseph",
+    "Andrew",
+    "Ryan",
+    "Brandon",
+    "Jason",
+    "Justin",
+    "Sarah",
+    "William",
+    "Jonathan",
+    "Brian",
+    "Anthony",
+    "Eric",
+    "Elizabeth",
+    "Adam",
+    "Kevin",
+    "Steven",
+    "Thomas",
+    "Kyle",
+    "Rachel",
+    "Laura",
+    "Richard",
+    "Amy",
+    "Crystal",
+    "Michelle",
+    "Jeremy",
+    "Mark",
+    "Emily",
+    "Aaron",
+    "Charles",
+    "Jacob",
+    "Stephen",
+    "Patrick",
+    "Sean",
+    "Jamie",
+    "Kelly",
+    "Paul",
+    "Tyler",
+    "Scott",
+    "Mary",
+    "Lisa",
+    "Jose",
+    "Alexander",
+]
+
 NAMES = [
     "Michael",
     "Christopher",
@@ -335,6 +393,28 @@ def gen_prompt_uniform(
             )
             nb_gen += 1
     return ioi_prompts
+
+
+def gen_templated_prompts(
+    prompt_type="mixed", template_idex=0, N=100, symmetric=False
+) -> List[EvalItem]:
+    assert prompt_type in ("abba", "baba", "mixed")
+
+    if prompt_type == "abba":
+        templates = [ABBA_TEMPLATES[template_idex]]
+    elif prompt_type == "baba":
+        templates = [BABA_TEMPLATES[template_idex]]
+    elif prompt_type == "mixed":
+        templates = [ABBA_TEMPLATES[template_idex], BABA_TEMPLATES[template_idex]]
+
+    prompts = gen_prompt_uniform(
+        templates, SINGLE_TOKEN_NAMES, NOUNS_DICT, N, symmetric
+    )
+
+    return [
+        {"text": p["text"], "correct": " " + p["IO"], "counter": " " + p["S"]}
+        for p in prompts
+    ]
 
 
 def gen_flipped_prompts(prompts, names, flip=("S2", "IO")):
