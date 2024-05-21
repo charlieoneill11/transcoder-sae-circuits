@@ -80,7 +80,7 @@ def get_sae_errors(sae, z_batch):
         assert torch.allclose(z_recon + sae_error, z_batch, rtol=1e-4, atol=1e-4)
         return sae_error
 
-def train_model(model: Union[GatedSAE, SparseAutoencoder], tl_model, sae, n_batches: int, lr: float, repo_name: str, layer: int, l1_coefficient: float, batch_size: int, projection_up: int, activation_store) -> float:
+def train_regular_sae(model: Union[GatedSAE, SparseAutoencoder], tl_model, sae, n_batches: int, lr: float, repo_name: str, layer: int, l1_coefficient: float, batch_size: int, projection_up: int, activation_store) -> float:
     optimizer = optim.Adam(model.parameters(), lr=lr)
     model = model.to(device)
     sae = sae.to(device)
@@ -97,16 +97,16 @@ def train_model(model: Union[GatedSAE, SparseAutoencoder], tl_model, sae, n_batc
         "test_loss": initial_test_loss,
         "recon_loss": initial_recon_loss,
         "l0_loss": initial_l0_loss,
-        "dead_neurons": initial_dead_neurons
+        "dead_neurons": initial_dead_neurons,
+        "training_type": "regular_sae"
     })
 
     for batch_num in trange(n_batches, desc='Training Batches'):
         model.train()
         batch_tokens = activation_store.get_batch_tokens().to(device)
         z_acts = get_z_activations(tl_model, batch_tokens, layer)
-        sae_errors = get_sae_errors(sae, z_acts)
         optimizer.zero_grad()
-        sae_out, loss, _ = model(z_acts, sae_errors)
+        sae_out, loss, _ = model(z_acts, z_acts)
         loss.backward()
         optimizer.step()
 
@@ -116,7 +116,6 @@ def train_model(model: Union[GatedSAE, SparseAutoencoder], tl_model, sae, n_batc
 
         # Clear cache
         del z_acts
-        del sae_errors
         del batch_tokens
         torch.cuda.empty_cache()
         
@@ -136,47 +135,12 @@ def train_model(model: Union[GatedSAE, SparseAutoencoder], tl_model, sae, n_batc
         if total_steps in {50000, 100000, 150000, 200000}:
             resample_neurons(model, neuron_activity, optimizer)
 
-        # Save and upload the model every 1000 batches
+        # Save the model locally every 1000 batches
         if (batch_num + 1) % 1000 == 0:
             local_model_path = f'./{repo_name}/sae_layer_{layer}.pt'
             os.makedirs(os.path.dirname(local_model_path), exist_ok=True)
             torch.save(model.state_dict(), local_model_path)
-
-            # Create config dictionary
-            config = {
-                "layer": layer,
-                "model_type": type(model).__name__,
-                "n_batches": batch_num+1,
-                "l1_coefficient": l1_coefficient,
-                "projection_up": projection_up,
-                "batch_size": batch_size,
-                "learning_rate": lr,
-                "test_loss": test_loss,
-                "reconstruction_error": recon_loss,
-                "l0_loss": l0_loss,
-                "dead_neurons_percentage": dead_neurons
-            }
-
-            # Save config to JSON file
-            config_path = f'./{repo_name}/config_layer_{layer}.json'
-            with open(config_path, 'w') as f:
-                json.dump(config, f, indent=4)
-
-            # Upload model and config to Hugging Face
-            api = HfApi(token="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")
-            api.upload_file(
-                path_or_fileobj=local_model_path,
-                path_in_repo=f'sae_layer_{layer}.pt',
-                repo_id=f'charlieoneill/{repo_name}',
-                token="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"
-            )
-            api.upload_file(
-                path_or_fileobj=config_path,
-                path_in_repo=f'config_layer_{layer}.json',
-                repo_id=f'charlieoneill/{repo_name}',
-                token="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"
-            )
-            print(f"Model and config saved and uploaded for batch {batch_num + 1}")
+            print(f"Model saved locally for batch {batch_num + 1}")
 
     return recon_loss, l0_loss
 
@@ -216,12 +180,12 @@ def evaluate_model(model: Union[GatedSAE, SparseAutoencoder], tl_model, activati
 
     return avg_loss, avg_recon_loss, avg_l0_loss, percentage_dead_neurons
 
-def main(layer: int, model_type: str, n_batches: int, l1_coefficient: float, batch_size: int, lr: float, projection_up: int, repo_name: str):
+def main_regular_sae(layer: int, model_type: str, n_batches: int, l1_coefficient: float, batch_size: int, lr: float, projection_up: int, repo_name: str):
     torch.set_grad_enabled(False)
     print(f"Running on {device}...")
 
     # Set the W&B run name
-    run_name = f"{layer}_{l1_coefficient}_{projection_up}"
+    run_name = f"{layer}_{l1_coefficient}_{projection_up}_regular"
 
     # Initialize W&B
     wandb.init(project=repo_name, name=run_name, config={
@@ -231,7 +195,8 @@ def main(layer: int, model_type: str, n_batches: int, l1_coefficient: float, bat
         "l1_coefficient": l1_coefficient,
         "batch_size": batch_size,
         "learning_rate": lr,
-        "projection_up": projection_up
+        "projection_up": projection_up,
+        "training_type": "regular_sae"
     })
 
     # Load SAE model as before
@@ -264,10 +229,10 @@ def main(layer: int, model_type: str, n_batches: int, l1_coefficient: float, bat
     
     model = model.to(device)
 
-    final_recon_loss, final_l0_loss = train_model(model=model, tl_model=tl_model, sae=sae, 
-                                                  n_batches=n_batches, lr=lr, repo_name=repo_name, 
-                                                  layer=layer, l1_coefficient=l1_coefficient, batch_size=batch_size, 
-                                                  projection_up=projection_up, activation_store=activation_store)
+    final_recon_loss, final_l0_loss = train_regular_sae(model=model, tl_model=tl_model, sae=sae, 
+                                                        n_batches=n_batches, lr=lr, repo_name=repo_name, 
+                                                        layer=layer, l1_coefficient=l1_coefficient, batch_size=batch_size, 
+                                                        projection_up=projection_up, activation_store=activation_store)
 
     print(f"Final Reconstruction Error: {final_recon_loss:.4f}")
     print(f"Final L0 Loss: {final_l0_loss:.4f}")
@@ -276,7 +241,7 @@ def main(layer: int, model_type: str, n_batches: int, l1_coefficient: float, bat
     wandb.finish()
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description="Train and Save Gated SAE for Transformer Layers")
+    parser = argparse.ArgumentParser(description="Train and Save Regular SAE for Transformer Layers")
     parser.add_argument('--layer', type=int, required=True, help='Layer number to train the SAE on')
     parser.add_argument('--model_type', type=str, default='gated', choices=['gated', 'vanilla'], help='Type of SAE model to train')
     parser.add_argument('--n_batches', type=int, default=5000, help='Number of training batches')
@@ -284,11 +249,11 @@ if __name__ == '__main__':
     parser.add_argument('--batch_size', type=int, default=4, help='Batch size for training')
     parser.add_argument('--lr', type=float, default=0.001, help='Learning rate for training')
     parser.add_argument('--projection_up', type=int, default=32, help='Factor to increase the number of learned features by')
-    parser.add_argument('--repo_name', type=str, default="error-saes", help='HuggingFace repository name to save the model')
+    parser.add_argument('--repo_name', type=str, default="regular-sae", help='Repository name to save the model locally')
 
     args = parser.parse_args()
 
     # Print total number of tokens we will train for = batch_size * n_batches * 128
     print(f"Total number of tokens we will train for: {args.batch_size * args.n_batches * 128}")
 
-    main(args.layer, args.model_type, args.n_batches, args.l1_coefficient, args.batch_size, args.lr, args.projection_up, args.repo_name)
+    main_regular_sae(args.layer, args.model_type, args.n_batches, args.l1_coefficient, args.batch_size, args.lr, args.projection_up, args.repo_name)
