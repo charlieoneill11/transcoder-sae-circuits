@@ -3,8 +3,18 @@
 %autoreload 2
 
 # %%
+
+
 from ioi_dataset import NAMES, SINGLE_TOKEN_NAMES, ABBA_TEMPLATES, gen_prompt_uniform, BABA_TEMPLATES, NOUNS_DICT, gen_templated_prompts
 from transformer_lens import HookedTransformer, utils, ActivationCache
+
+# %%
+import torch
+
+# %%
+torch.split(torch.tensor([1, 2, 3, 4, 5, 6]), 2)
+
+
 
 # %%
 model = HookedTransformer.from_pretrained("gpt2-small")

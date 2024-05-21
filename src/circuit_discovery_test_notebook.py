@@ -28,7 +28,7 @@ torch.set_grad_enabled(False)
 inverse = "Mary and Jeff went to the store, and Jeff gave an apple to Mary"
 
 IOI_EXAMPLE_PROMPT = "Mary and Jeff went to the store, and Mary gave an apple to Jeff"
-IOI_EXAMPLE_PROMPT = "Allen and Ben went to the store, and Allen gave an apple to Ben"
+# IOI_EXAMPLE_PROMPT = "Allen and Ben went to the store, and Allen gave an apple to Ben"
 # IOI_EXAMPLE_PROMPT = "Donald and Helen went to the store, and Donald gave an apple to Helen"
 " the teller said, 'I don't know if make the bank deposit today because it looks like your account"
 # prompt = " Nolan said.\"So you couldn't really sit and go, 'Okay,you're going to do the Joker,'"
@@ -44,8 +44,23 @@ IOI_EXAMPLE_PROMPT = "Allen and Ben went to the store, and Allen gave an apple t
 cd.model.to_str_tokens(prompt)
 # %%
 
-cd = CircuitDiscovery(SUCCESSOR_EXAMPLE_PROMPT, -2, allowed_components_filter=only_feature)
+# cd = CircuitDiscovery(SUCCESSOR_EXAMPLE_PROMPT, -2, allowed_components_filter=only_feature)
+cd = CircuitDiscovery(IOI_EXAMPLE_PROMPT, -2, allowed_components_filter=only_feature)
 # cd = CircuitDiscovery(prompt, -2, allowed_components_filter=only_feature)
+
+# %%
+cd.get_top_next_contributors(k=2, reciever_threshold=4, contributor_threshold=4)
+
+
+# %%
+cd.greedily_add_top_contributors(k=2, print_new_contributs=True, reciever_threshold=4, contributor_threshold=4)
+cd.print_attn_heads_and_mlps_in_graph()
+
+# %%
+cd.visualize_graph()
+
+
+
 
 
 # %%
@@ -65,15 +80,16 @@ utils.test_prompt("The war lasted from 1620 to 16", '40', cd.model, prepend_spac
 # %%
 cd.reset_graph()
 
-p = 4
-c = 1
+p = 1
+c = 2
 for _ in range(p):
     cd.add_greedy_pass(contributors_per_node=c)
 
 cd.print_attn_heads_and_mlps_in_graph()
 
 # %%
-cd.visualize_graph(begin_layer=0)
+cd.visualize_graph(begin_layer=7)
+
 
 # %%
 cd.visualize_graph_performance_against_base_ablation(head_ablation_style="zero")

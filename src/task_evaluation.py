@@ -6,6 +6,7 @@ from typing import List, Callable
 from transformer_lens import ActivationCache
 from data.eval_dataset import EvalItem
 from tqdm import trange
+from plotly_utils import *
 
 
 class TaskEvaluation:
@@ -66,6 +67,8 @@ class TaskEvaluation:
         return cd
 
     def evaluate_circuit_discovery_for_prompt(self, prompt_idx: int, **kwargs):
+        print(self.prompts[prompt_idx]["text"])
+
         cd = self.get_circuit_discovery_for_prompt(prompt_idx)
         cd.visualize_graph_performance_against_mean_ablation(self.mean_cache, **kwargs)
 
@@ -121,3 +124,27 @@ class TaskEvaluation:
             print(f"Average normalized logit difference: {normalized*100:.3g}%")
 
         return normalized
+
+    def get_attn_head_freqs_over_dataset(
+        self, N=None, visualize=True, return_freqs=True
+    ):
+        if N is None:
+            N = len(self.prompts)
+
+        head_freqs = torch.zeros(12, 12)
+
+        for i in trange(N):
+            cd = self.get_circuit_discovery_for_prompt(i)
+            head_freqs = head_freqs + cd.attn_heads_tensor()
+
+        head_freqs = head_freqs.float() / N
+
+        if visualize:
+            imshow(
+                head_freqs,
+                title="Attn Head Freqs for Strategy + Task",
+                labels={"x": "Head", "y": "Layer"},
+            )
+
+        if return_freqs:
+            return head_freqs

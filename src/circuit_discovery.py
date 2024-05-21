@@ -16,6 +16,8 @@ from transformer_lens import ActivationCache
 from ranking_utils import visualize_top_tokens
 from jaxtyping import Float
 from IPython.display import HTML
+from plotly_utils import *
+from pprint import pprint
 
 from abc import ABC
 
@@ -391,6 +393,16 @@ class CircuitDiscoveryNode:
     def layer(self):
         raise NotImplementedError("Override this")
 
+    def __str__(self):
+        return f"DiscoveryNode: {str(self.component_lens)}"
+
+    def __repr__(self):
+        return str(self)
+
+    @property
+    def explored(self):
+        return NotImplementedError("Override this")
+
 
 class CircuitDiscoveryRegularNode(CircuitDiscoveryNode):
     def __init__(
@@ -431,6 +443,10 @@ class CircuitDiscoveryRegularNode(CircuitDiscoveryNode):
             ]
 
         return self._top_k_allowed_contributors
+
+    @property
+    def explored(self):
+        return not self.top_k_allowed_contributors or bool(self.contributors_in_graph)
 
     @property
     def contributors_in_graph(self) -> List["CircuitDiscoveryNode"]:
@@ -489,6 +505,14 @@ class CircuitDiscoveryHeadNode(CircuitDiscoveryNode):
     @property
     def source(self):
         return self.component_lens.run_data["source_index"]
+
+    @property
+    def explored(self):
+        return all(
+            not self.top_k_allowed_contributors(head_type)
+            or bool(self.contributors_in_graph(head_type))
+            for head_type in ("q", "k", "v")
+        )
 
     @property
     def dest(self):
@@ -677,44 +701,130 @@ class CircuitDiscovery:
                 for head_type in ["q", "k", "v"]:
                     queue.extend(node.contributors_in_graph(head_type))
 
+    def all_tuple_ids_in_graph(self):
+        all_ids = []
+
+        def visit_fn(node, all_ids):
+            all_ids.append(node)
+
+        fn = partial(visit_fn, all_ids=all_ids)
+        self.traverse_graph(fn)
+
+        return all_ids
+
     def all_nodes_in_graph(self):
-        visited_ids = []
         all_nodes = []
 
-        queue: List[CircuitDiscoveryNode] = [self.root_node]
-
-        while len(queue) > 0:
-            node = queue.pop(0)
-
-            if node.tuple_id in visited_ids:
-                continue
-
+        def visit_fn(node, all_nodes):
             all_nodes.append(node)
 
-            visited_ids.append(node.tuple_id)
-
-            if isinstance(node, CircuitDiscoveryRegularNode):
-                queue.extend(node.contributors_in_graph)
-
-            elif isinstance(node, CircuitDiscoveryHeadNode):
-                for head_type in ["q", "k", "v"]:
-                    queue.extend(node.contributors_in_graph(head_type))
+        fn = partial(visit_fn, all_nodes=all_nodes)
+        self.traverse_graph(fn)
 
         return all_nodes
 
     def add_greedy_pass_against_all_existing_nodes(
-        self, contributors_per_node=1, skip_z_features=False, layer_threshold=-1
+        self,
+        contributors_per_node=1,
+        skip_z_features=False,
+        layer_threshold=-1,
+        minimal=False,
     ):
         for node in self.all_nodes_in_graph():
             if skip_z_features and node.component == CircuitComponent.Z_FEATURE:
                 continue
 
-            if node.layer < layer_threshold:
+            if node.layer < layer_threshold and node.component not in [
+                CircuitComponent.UNEMBED,
+                CircuitComponent.UNEMBED_AT_TOKEN,
+            ]:
                 continue
 
-            self.add_greedy_pass(contributors_per_node=contributors_per_node, root=node)
+            self.add_greedy_pass(
+                contributors_per_node=contributors_per_node, root=node, minimal=minimal
+            )
 
-    def add_greedy_pass(self, contributors_per_node=1, root=None):
+    def get_top_next_contributors(
+        self, k=1, reciever_threshold=None, contributor_threshold=None
+    ):
+        all_top_contributors = []
+
+        if reciever_threshold is None:
+            reciever_threshold = 0
+
+        if contributor_threshold is None:
+            contributor_threshold = 0
+
+        def visit_fn(node, all_top_contributors, k):
+            if node.layer < reciever_threshold and node.component not in [
+                CircuitComponent.UNEMBED,
+                CircuitComponent.UNEMBED_AT_TOKEN,
+            ]:
+                return
+
+            if isinstance(node, CircuitDiscoveryRegularNode):
+                contributors = [
+                    c
+                    for c in node.get_top_unused_contributors()
+                    if c[0].run_data.get("layer", 0) >= contributor_threshold
+                ][:k]
+
+                for contributor in contributors:
+                    all_top_contributors.append((contributor[1], contributor[0], node))
+
+            elif isinstance(node, CircuitDiscoveryHeadNode):
+                for head_type in ["q", "k", "v"]:
+                    contributors = [
+                        c
+                        for c in node.get_top_unused_contributors(head_type)
+                        if c[0].run_data.get("layer", 0) >= contributor_threshold
+                    ][:k]
+
+                    for contributor in contributors:
+                        all_top_contributors.append(
+                            (contributor[1], contributor[0], node, head_type)
+                        )
+
+        fn = partial(visit_fn, all_top_contributors=all_top_contributors, k=k)
+
+        self.traverse_graph(fn)
+
+        top_contribs = sorted(all_top_contributors, key=lambda x: x[0], reverse=True)
+
+        return top_contribs
+
+    def greedily_add_top_contributors(
+        self,
+        k=1,
+        print_new_contributs=False,
+        reciever_threshold=None,
+        contributor_threshold=None,
+    ):
+        top_contribs = self.get_top_next_contributors(
+            k,
+            reciever_threshold=reciever_threshold,
+            contributor_threshold=contributor_threshold,
+        )[:k]
+
+        if print_new_contributs:
+            pprint(top_contribs)
+
+        for contrib in top_contribs:
+            reciever = contrib[2]
+
+            if isinstance(reciever, CircuitDiscoveryRegularNode):
+                node = reciever.add_contributor_edge(contrib[1])
+            elif isinstance(reciever, CircuitDiscoveryHeadNode):
+                node = reciever.add_contributor_edge(contrib[3], contrib[1])
+
+            if not node.explored:
+                self.add_greedy_pass(root=node, minimal=True)
+
+    def add_greedy_pass(self, contributors_per_node=1, root=None, minimal=False):
+        """
+        if `minimal` then we don't recursively explore nodes that are already in the graph
+        """
+
         visited_ids = []
 
         if root is None:
@@ -742,6 +852,9 @@ class CircuitDiscovery:
 
                     total_contrib += child[1]
 
+                    if minimal and child_discovery_node.explored:
+                        continue
+
                     queue.append(child_discovery_node)
 
                 # print(node.tuple_id, f"Contrib: {total_contrib*100:.3g}%")
@@ -760,12 +873,31 @@ class CircuitDiscovery:
 
                         total_contrib += child[1]
 
+                        if minimal and child_discovery_node.explored:
+                            continue
+
                         queue.append(child_discovery_node)
 
                     # print(
                     #     node.tuple_id_for_head_type(head_type),
                     #     f"Contrib: {total_contrib:.3g}%",
                     # )
+
+    def attn_heads_tensor(self, visualize=False):
+        attn_heads = torch.zeros(12, 12)
+
+        def track_included_heads_and_mlps(node: CircuitDiscoveryNode, attn_heads):
+            if isinstance(node, CircuitDiscoveryHeadNode):
+                attn_heads[node.layer, node.head] = 1
+
+        fn = partial(track_included_heads_and_mlps, attn_heads=attn_heads)
+
+        self.traverse_graph(fn)
+
+        if visualize:
+            imshow(attn_heads, labels={"x": "Head", "y": "Layer"})
+
+        return attn_heads
 
     def get_heads_and_mlps_in_graph(self) -> Tuple[List[List[int]], List[int]]:
         attn_heads_set = set()
