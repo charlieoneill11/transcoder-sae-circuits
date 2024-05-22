@@ -21,6 +21,9 @@ torch.set_grad_enabled(False)
 dataset_prompts = gen_templated_prompts(template_idex=1)
 
 # %%
+dataset_prompts
+
+# %%
 def component_filter(component: str):
     return component in [
         CircuitComponent.Z_FEATURE,
