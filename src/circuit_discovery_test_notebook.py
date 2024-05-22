@@ -28,25 +28,73 @@ torch.set_grad_enabled(False)
 inverse = "Mary and Jeff went to the store, and Jeff gave an apple to Mary"
 
 IOI_EXAMPLE_PROMPT = "Mary and Jeff went to the store, and Mary gave an apple to Jeff"
+IOI_COUNTER = "Mary and Jeff went to the store, and Mary gave an apple to Mary"
 # IOI_EXAMPLE_PROMPT = "Allen and Ben went to the store, and Allen gave an apple to Ben"
 # IOI_EXAMPLE_PROMPT = "Donald and Helen went to the store, and Donald gave an apple to Helen"
 " the teller said, 'I don't know if make the bank deposit today because it looks like your account"
 # prompt = " Nolan said.\"So you couldn't really sit and go, 'Okay,you're going to do the Joker,'"
 
 # %%
-
-
-# %%
-
-
-
-
-cd.model.to_str_tokens(prompt)
-# %%
-
 # cd = CircuitDiscovery(SUCCESSOR_EXAMPLE_PROMPT, -2, allowed_components_filter=only_feature)
-cd = CircuitDiscovery(IOI_EXAMPLE_PROMPT, -2, allowed_components_filter=only_feature)
+cd = CircuitDiscovery(IOI_EXAMPLE_PROMPT, -4, allowed_components_filter=only_feature)
+counter = CircuitDiscovery(IOI_COUNTER, -2, allowed_components_filter=only_feature)
 # cd = CircuitDiscovery(prompt, -2, allowed_components_filter=only_feature)
+
+# %%
+
+pass_based = True
+
+passes = 5
+node_contributors = 1
+first_pass_minimal = True
+
+sub_passes = 3
+do_sub_pass = False
+layer_thres = 9
+minimal = True
+
+
+num_greedy_passes = 20
+k = 1
+N = 30
+
+thres = 4
+
+# # Danny and Charlie... Charlie gave shit to Danny
+# # Danny and Charlie... Charlie gave shit to Charlie
+# # Danny and Charlie... Danny gave shit to Danny
+# #
+
+def strategy(cd: CircuitDiscovery):
+    if pass_based:
+        for _ in range(passes):
+            cd.add_greedy_pass(contributors_per_node=node_contributors, minimal=first_pass_minimal)
+
+            if do_sub_pass:
+                for _ in range(sub_passes):
+                    cd.add_greedy_pass_against_all_existing_nodes(contributors_per_node=node_contributors, skip_z_features=True, layer_threshold=layer_thres, minimal=minimal)
+    else:
+        for _ in range(num_greedy_passes):
+            cd.greedily_add_top_contributors(k=k, reciever_threshold=thres)
+
+cd.reset_graph()
+counter.reset_graph()
+
+strategy(cd)
+strategy(counter)
+
+# %%
+cd.print_attn_heads_and_mlps_in_graph()
+# counter.print_attn_heads_and_mlps_in_graph()
+
+# %%
+cd.visualize_graph()
+
+# %%
+counter.visualize_graph()
+
+# %%
+cd.visualize_attn_heads_in_graph()
 
 # %%
 cd.get_top_next_contributors(k=2, reciever_threshold=4, contributor_threshold=4)
@@ -99,7 +147,7 @@ cd.visualize_graph_performance_against_base_ablation(head_ablation_style="zero")
 sorted([str(n) for n in cd.transformer_model.discovery_node_cache])
 
 # %%
-cd.component_lens_at_loc([0, 0, 0, 0, 0])
+cd.component_lens_at_loc_on_graph([0, 0, 0, 0, 0])
 
 # %%
 cd.visualize_attn_heads_in_graph()
@@ -108,7 +156,7 @@ cd.visualize_attn_heads_in_graph()
 
 
 # %%
-cd.component_lens_at_loc([])
+cd.component_lens_at_loc_on_graph([])
 
 
 

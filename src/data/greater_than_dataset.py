@@ -6,6 +6,14 @@ from data.eval_dataset import EvalItem
 from typing import List
 
 
+GT_GROUND_TRUTH_DATA = torch.load("data/gt_ground_truth.pt")
+
+GT_GROUND_TRUTH_HEADS = torch.zeros(12, 12)
+
+for layer, head in GT_GROUND_TRUTH_DATA:
+    GT_GROUND_TRUTH_HEADS[layer, head] = 1
+
+
 SINGLE_TOKEN_NOUNS = [
     "attack",
     "campaign",
@@ -106,13 +114,13 @@ def generate_greater_than_dataset(N=10, counter_minus=10) -> List[EvalItem]:
 
     print(pre_toks.shape, all_next_toks.shape)
 
-    final_toks = torch.concat([pre_toks, all_next_toks.unsqueeze(-1)], dim=-1)[:, 1:]
+    # final_toks = torch.concat([pre_toks, all_next_toks.unsqueeze(-1)], dim=-1)[:, 1:]
 
     str_prompts = []
     correct_toks = []
 
     for indices in torch.split(torch.arange(N), 100):
-        str_prompts.extend(model.tokenizer.batch_decode(final_toks[indices]))
+        str_prompts.extend(model.tokenizer.batch_decode(pre_toks[indices]))
         correct_toks.extend(model.tokenizer.batch_decode(all_next_toks[indices]))
 
     counter_toks = [str(max(0, (year % 100) - counter_minus)) for year in years]

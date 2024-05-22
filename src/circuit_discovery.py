@@ -1235,7 +1235,61 @@ class CircuitDiscovery:
 
         visualize_top_tokens(self.model, self.tokens, graph_logits, self.seq_index)
 
+    def get_features_at_heads_in_graph(self):
+        features_at_heads = [
+            [set() for _ in range(self.model.cfg.n_heads)]
+            for _ in range(self.model.cfg.n_layers)
+        ]
+
+        def visit_fn(node: CircuitDiscoveryNode, features_at_heads: List[List[Set]]):
+            if not isinstance(node, CircuitDiscoveryHeadNode):
+                return
+
+            head = node.head
+            layer = node.layer
+            feature = node.component_lens.run_data["feature"]
+
+            features_at_heads[layer][head].add(feature)
+
+        fn = partial(visit_fn, features_at_heads=features_at_heads)
+
+        self.traverse_graph(fn)
+
+        return features_at_heads
+
     def component_lens_at_loc(self, loc: List):
+        node: CircuitDiscoveryNode = self.root_node
+        head_type = "q"
+
+        while loc:
+            next_loc = loc.pop(0)
+
+            if isinstance(node, CircuitDiscoveryRegularNode):
+                sorted_contribs = node.top_k_contributors
+            elif isinstance(node, CircuitDiscoveryHeadNode):
+                sorted_contribs = node.top_k_contributors(head_type)
+
+            if next_loc < 0 or next_loc > len(sorted_contribs) - 1:
+                raise ValueError("Invalid location")
+
+            node = self.transformer_model.get_discovery_node_at_locator(
+                sorted_contribs[next_loc][0]
+            )
+
+            if isinstance(node, CircuitDiscoveryHeadNode):
+                if not loc:
+                    raise ValueError("Need to provide 'q', 'k', or 'v'")
+
+                head_type = loc.pop(0)
+                if head_type not in ["q", "k", "v"]:
+                    raise ValueError("Invalid head input")
+
+        if isinstance(node, CircuitDiscoveryRegularNode):
+            node.lens()
+        elif isinstance(node, CircuitDiscoveryHeadNode):
+            node.lens(head_type)
+
+    def component_lens_at_loc_on_graph(self, loc: List):
         node: CircuitDiscoveryNode = self.root_node
         head_type = "q"
 
