@@ -1,4 +1,5 @@
 # %%
+
 %load_ext autoreload
 %autoreload 2
 
@@ -18,23 +19,23 @@ from circuit_lens import CircuitComponent
 from plotly_utils import *
 from data.ioi_dataset import IOI_GROUND_TRUTH_HEADS
 from data.greater_than_dataset import GT_GROUND_TRUTH_HEADS
+from memory import get_gpu_memory
 
 from utils import get_attn_head_roc
 
 
 # %%
 torch.set_grad_enabled(False)
-
-
-
+get_gpu_memory()
 # %%
 dataset_prompts = gen_templated_prompts(template_idex=1, N=500)
+
 
 # dataset_prompts = generate_greater_than_dataset(N=100)
 
 
-
 # %%
+
 def component_filter(component: str):
     return component in [
         CircuitComponent.Z_FEATURE,
@@ -90,13 +91,17 @@ def strategy(cd: CircuitDiscovery):
 
 
 
-task_eval = TaskEvaluation(prompts=dataset_prompts, eval_index=-2, circuit_discovery_strategy=strategy, allowed_components_filter=component_filter)
+task_eval = TaskEvaluation(prompts=dataset_prompts, circuit_discovery_strategy=strategy, allowed_components_filter=component_filter)
 
 
 # a = task_eval.get_attn_head_freqs_over_dataset(N=N, return_freqs=True)
 
-# cd = task_eval.get_circuit_discovery_for_prompt(11)
-# cd.print_attn_heads_and_mlps_in_graph()
+# %%
+cd = task_eval.get_circuit_discovery_for_prompt(20)
+cd.print_attn_heads_and_mlps_in_graph()
+
+# %%
+cd.visualize_graph()
 
 # %%
 f = task_eval.get_features_at_heads_over_dataset(N=30)

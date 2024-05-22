@@ -129,3 +129,7 @@ def generate_greater_than_dataset(N=10, counter_minus=10) -> List[EvalItem]:
         {"text": prompt, "correct": correct, "counter": counter}
         for prompt, correct, counter in zip(str_prompts, correct_toks, counter_toks)
     ]
+
+
+# %%
+model.to_single_token("h")

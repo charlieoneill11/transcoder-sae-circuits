@@ -4,11 +4,13 @@
 
 # %%
 from example_prompts import SUCCESSOR_EXAMPLE_PROMPT, IOI_EXAMPLE_PROMPT
+
 from circuit_discovery import CircuitDiscovery, only_feature
 from transformer_lens import HookedTransformer, utils
 from transformer_lens.hook_points import HookPoint
 import torch.nn.functional as F
 from plotly_utils import *
+from circuit_lens import CircuitComponent
 
 from rich import print as rprint
 from rich.table import Table
@@ -19,8 +21,18 @@ import einops
 
 
 # %%
-
 torch.set_grad_enabled(False)
+
+# %%
+a = set([1, 2])
+a.update(set([3, 4]))
+a.update(set([3, 5]))
+
+a
+
+# set([1, 2]) | set([2, 4])
+
+
 
 # %%
 
@@ -36,9 +48,14 @@ IOI_COUNTER = "Mary and Jeff went to the store, and Mary gave an apple to Mary"
 
 # %%
 # cd = CircuitDiscovery(SUCCESSOR_EXAMPLE_PROMPT, -2, allowed_components_filter=only_feature)
-cd = CircuitDiscovery(IOI_EXAMPLE_PROMPT, -4, allowed_components_filter=only_feature)
+cd = CircuitDiscovery(IOI_EXAMPLE_PROMPT, -2, allowed_components_filter=only_feature)
 counter = CircuitDiscovery(IOI_COUNTER, -2, allowed_components_filter=only_feature)
 # cd = CircuitDiscovery(prompt, -2, allowed_components_filter=only_feature)
+
+# %%
+p = "Mary and Jeff went to the store, and Mary gave an apple to"
+cd = CircuitDiscovery(p, token=" Jeff", allowed_components_filter=only_feature)
+
 
 # %%
 
@@ -77,6 +94,8 @@ def strategy(cd: CircuitDiscovery):
         for _ in range(num_greedy_passes):
             cd.greedily_add_top_contributors(k=k, reciever_threshold=thres)
 
+
+
 cd.reset_graph()
 counter.reset_graph()
 
@@ -84,11 +103,33 @@ strategy(cd)
 strategy(counter)
 
 # %%
+cd.get_features_at_heads_in_graph()
+
+# %%
+cd.visualize_graph()
+
+# %%
+
+cd.set_root((CircuitComponent.Z_FEATURE, 8, 14, 16513))
+
+# %%
+cd.component_lens_at_loc([0, 'v'])
+
+
+
+
+
+
+# %%
 cd.print_attn_heads_and_mlps_in_graph()
 # counter.print_attn_heads_and_mlps_in_graph()
 
 # %%
 cd.visualize_graph()
+
+# %%
+cd.component_lens_at_loc([])
+
 
 # %%
 counter.visualize_graph()

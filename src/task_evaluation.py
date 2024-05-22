@@ -99,8 +99,8 @@ class TaskEvaluation:
         self,
         prompts: List[EvalItem],
         circuit_discovery_strategy: Callable[[CircuitDiscovery], None],
-        eval_index: int = -2,
         allowed_components_filter: Callable[[str], bool] = all_allowed,
+        eval_index: int = -1,
     ):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.model = get_model_encoders(self.device)[0]
@@ -140,16 +140,21 @@ class TaskEvaluation:
     def get_circuit_discovery_for_prompt(
         self, prompt_idx: int, use_counter_factual=False, **kwargs
     ):
-        prompt = (
-            self.prompts[prompt_idx]["text"] + self.prompts[prompt_idx]["correct"]
-            if not use_counter_factual
-            else self.prompts[prompt_idx]["text"] + self.prompts[prompt_idx]["counter"]
-        )
+        if use_counter_factual:
+            token = self.prompts[prompt_idx]["counter"]
+        else:
+            token = self.prompts[prompt_idx]["correct"]
+        # prompt = (
+        #     self.prompts[prompt_idx]["text"] + self.prompts[prompt_idx]["correct"]
+        #     if not use_counter_factual
+        #     else self.prompts[prompt_idx]["text"] + self.prompts[prompt_idx]["counter"]
+        # )
         # print("prompt:", prompt)
 
         cd = CircuitDiscovery(
-            prompt,
-            self.eval_index,
+            self.prompts[prompt_idx]["text"],
+            seq_index=self.eval_index,
+            token=token,
             allowed_components_filter=self.allowed_components_filter,
         )
 

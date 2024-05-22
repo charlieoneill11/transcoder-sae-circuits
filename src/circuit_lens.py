@@ -339,7 +339,11 @@ class ComponentLens:
     @property
     def tuple_id(self):
         if self.component == CircuitComponent.UNEMBED:
-            return (self.component, self.run_data["seq_index"], self.run_data["token"])
+            return (
+                self.component,
+                self.run_data["seq_index"],
+                self.run_data["token_id"],
+            )
         elif self.component == CircuitComponent.UNEMBED_AT_TOKEN:
             return (self.component, self.run_data["seq_index"])
         elif self.component == CircuitComponent.ATTN_HEAD:
@@ -360,13 +364,24 @@ class ComponentLens:
             )
 
     @classmethod
-    def create_root_unembed_lens(cls, circuit_lens: "CircuitLens", seq_index):
+    def create_unembed_at_token_lens(cls, circuit_lens: "CircuitLens", seq_index):
         return cls(
             circuit_lens=circuit_lens,
             component=CircuitComponent.UNEMBED_AT_TOKEN,
             run_data={
                 "seq_index": seq_index,
             },
+        )
+
+    @classmethod
+    def create_unembed_lens(cls, circuit_lens: "CircuitLens", seq_index, token):
+        if isinstance(token, str):
+            token = circuit_lens.model.to_single_token(token)
+
+        return cls(
+            circuit_lens=circuit_lens,
+            component=CircuitComponent.UNEMBED,
+            run_data={"seq_index": seq_index, "token_id": token},
         )
 
     def __str__(self):
@@ -481,8 +496,12 @@ def get_model_encoders(device):
 
     model = HookedTransformer.from_pretrained("gpt2-small", device=device)
 
+    print()
+    print("Loading SAEs...")
     z_saes = [ZSAE.load_zsae_for_layer(i) for i in trange(model.cfg.n_layers)]
 
+    print()
+    print("Loading Transcoders...")
     mlp_transcoders = [
         SparseTranscoder.load_from_hugging_face(i) for i in trange(model.cfg.n_layers)
     ]

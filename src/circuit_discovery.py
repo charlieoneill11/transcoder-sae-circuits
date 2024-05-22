@@ -19,8 +19,6 @@ from IPython.display import HTML
 from plotly_utils import *
 from pprint import pprint
 
-from abc import ABC
-
 
 class AnalysisObject:
     circuit_discovery: "CircuitDiscovery"
@@ -242,7 +240,12 @@ class TransformerAnalysisModel(AnalysisObject):
             return self.discovery_node_cache[tuple_id]
 
         if component == CircuitComponent.UNEMBED:
-            raise NotImplementedError("Haven't implemented generic unembed yet!")
+            if lens is None:
+                raise ValueError("Must provide lens for unembed node creation")
+
+            return self._cache_discovery_node(
+                tuple_id, CircuitDiscoveryRegularNode(lens, self.circuit_discovery)
+            )
         elif component == CircuitComponent.UNEMBED_AT_TOKEN:
             seq_index = tuple_id[1]
 
@@ -627,10 +630,17 @@ class CircuitDiscovery:
     def __init__(
         self,
         prompt,
-        seq_index: int,
+        seq_index=None,
+        token: Optional[Union[str, int]] = None,
         allowed_components_filter: Callable[[str], bool] = all_allowed,
         k=10,
     ):
+        if seq_index is None:
+            if token is None:
+                seq_index = -2
+            else:
+                seq_index = -1
+
         self.lens = CircuitLens(prompt)
         self.seq_index = self.lens.process_seq_index(seq_index)
         self.allowed_components_filter = allowed_components_filter
@@ -639,9 +649,20 @@ class CircuitDiscovery:
 
         self.transformer_model = TransformerAnalysisModel(self)
 
-        self.root_node = self.transformer_model.get_discovery_node_at_locator(
-            ComponentLens.create_root_unembed_lens(self.lens, self.seq_index),
-        )
+        if token:
+            self.root_node = self.transformer_model.get_discovery_node_at_locator(
+                ComponentLens.create_unembed_lens(self.lens, self.seq_index, token),
+            )
+        else:
+            self.root_node = self.transformer_model.get_discovery_node_at_locator(
+                ComponentLens.create_unembed_at_token_lens(self.lens, self.seq_index),
+            )
+
+    def set_root(self, tuple_id, no_graph_reset=False):
+        if not no_graph_reset:
+            self.reset_graph()
+
+        self.root_node = self.transformer_model.get_discovery_node_at_locator(tuple_id)
 
     @property
     def model(self):
@@ -1335,9 +1356,8 @@ class CircuitDiscovery:
         def add_node_to_record(node: CircuitDiscoveryNode, layers, embed):
             component = node.tuple_id[0]
 
-            if component == CircuitComponent.UNEMBED:
-                raise NotImplementedError("Haven't implemented generic unembed yet!")
             if component in [
+                CircuitComponent.UNEMBED,
                 CircuitComponent.UNEMBED_AT_TOKEN,
                 CircuitComponent.EMBED,
                 CircuitComponent.POS_EMBED,
@@ -1386,20 +1406,30 @@ class CircuitDiscovery:
                             style="invis",
                             # , minlen=".1"
                         )
+        unembeds_at_token = list(embed.get(CircuitComponent.UNEMBED_AT_TOKEN, set()))
 
-        unembeds = list(embed.get(CircuitComponent.UNEMBED_AT_TOKEN, set()))
+        if unembeds_at_token:
+            with G.subgraph(name="unembed") as subgraph:
+                subgraph.attr(rank="same")
+                for unembed in unembeds_at_token:
+                    seq_index = unembed[1]
 
-        if not unembeds:
-            raise ValueError("We're trying to do an unembed")
+                    subgraph.node(
+                        str(unembed), label=f"UE: '{self.str_tokens[seq_index + 1]}'"
+                    )
 
-        with G.subgraph(name="unembed") as subgraph:
-            subgraph.attr(rank="same")
-            for unembed in unembeds:
-                seq_index = unembed[1]
+        unembeds = list(embed.get(CircuitComponent.UNEMBED, set()))
 
-                subgraph.node(
-                    str(unembed), label=f"UE: '{self.str_tokens[seq_index + 1]}'"
-                )
+        if unembeds:
+            with G.subgraph(name="unembed") as subgraph:
+                subgraph.attr(rank="same")
+                for unembed in unembeds:
+                    _, seq_index, token_i = unembed
+
+                    subgraph.node(
+                        str(unembed),
+                        label=f"UE: '{self.model.to_single_str_token(token_i)}'",
+                    )
 
         def component_to_name(comp: str) -> str:
             if comp == CircuitComponent.Z_FEATURE:
