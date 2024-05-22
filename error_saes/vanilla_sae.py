@@ -140,13 +140,17 @@ class SparseAutoencoder(nn.Module):
     def loss_fn(self, decoded_activations, learned_activations, resid_streams):
 
         # RECONSTRUCTION LOSS
-        recon_loss = F.mse_loss(decoded_activations, resid_streams)
+        per_item_mse_loss = self.per_item_mse_loss_with_target_norm(decoded_activations, resid_streams)
+        recon_loss = per_item_mse_loss.sum(dim=-1).mean()
 
         # SPARSITY LOSS
-        sparsity_loss = torch.mean(torch.norm(learned_activations, p=1, dim=1))
+        sparsity_loss = learned_activations.norm(p=1, dim=-1).mean()
 
         # combine
         return recon_loss + (self.l1_coefficient * sparsity_loss), recon_loss
 
     def initialise_tied_parameters(self) -> None:
         self.tied_bias.data = self.geometric_median_dataset.clone() 
+
+    def per_item_mse_loss_with_target_norm(self, preds, target):
+        return torch.nn.functional.mse_loss(preds, target, reduction='none')

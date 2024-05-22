@@ -70,15 +70,9 @@ def get_z_activations(model, batch, layer):
         del logits
         del cache
         z = einops.rearrange(z, "b s n d -> (b s) (n d)")
+        # Print norm of z
+        #print(f"Norm of z: {z.norm(dim=-1).mean()}")
     return z
-
-def get_sae_errors(sae, z_batch):
-    sae.eval()
-    with torch.no_grad():
-        _, z_recon, _, _, _ = sae(z_batch)
-        sae_error = z_batch - z_recon
-        assert torch.allclose(z_recon + sae_error, z_batch, rtol=1e-4, atol=1e-4)
-        return sae_error
 
 def train_regular_sae(model: Union[GatedSAE, SparseAutoencoder], tl_model, sae, n_batches: int, lr: float, repo_name: str, layer: int, l1_coefficient: float, batch_size: int, projection_up: int, activation_store) -> float:
     optimizer = optim.Adam(model.parameters(), lr=lr)
@@ -107,6 +101,8 @@ def train_regular_sae(model: Union[GatedSAE, SparseAutoencoder], tl_model, sae, 
         z_acts = get_z_activations(tl_model, batch_tokens, layer)
         optimizer.zero_grad()
         sae_out, loss, _ = model(z_acts, z_acts)
+        # Print norm of sae_out
+        #print(f"Norm of sae_out: {sae_out.norm(dim=-1).mean()}")
         loss.backward()
         optimizer.step()
 
@@ -117,6 +113,7 @@ def train_regular_sae(model: Union[GatedSAE, SparseAutoencoder], tl_model, sae, 
         # Clear cache
         del z_acts
         del batch_tokens
+        del sae_out
         torch.cuda.empty_cache()
         
         if (batch_num + 1) % 25 == 0:
@@ -154,8 +151,7 @@ def evaluate_model(model: Union[GatedSAE, SparseAutoencoder], tl_model, activati
         for _ in range(10):  # evaluate on 10 batches
             batch_tokens = activation_store.get_batch_tokens().to(device)
             z_acts = get_z_activations(tl_model, batch_tokens, layer)
-            sae_errors = get_sae_errors(sae, z_acts)
-            _, loss, recon_loss = model(z_acts, sae_errors)
+            _, loss, recon_loss = model(z_acts, z_acts)
             total_loss += loss.item()
             total_recon_loss += recon_loss.item()
             learned_activations = model.encoder(z_acts)
@@ -245,7 +241,7 @@ if __name__ == '__main__':
     parser.add_argument('--layer', type=int, required=True, help='Layer number to train the SAE on')
     parser.add_argument('--model_type', type=str, default='gated', choices=['gated', 'vanilla'], help='Type of SAE model to train')
     parser.add_argument('--n_batches', type=int, default=5000, help='Number of training batches')
-    parser.add_argument('--l1_coefficient', type=float, default=3e-4, help='L1 regularisation coefficient')
+    parser.add_argument('--l1_coefficient', type=float, default=2, help='L1 regularisation coefficient')
     parser.add_argument('--batch_size', type=int, default=4, help='Batch size for training')
     parser.add_argument('--lr', type=float, default=0.001, help='Learning rate for training')
     parser.add_argument('--projection_up', type=int, default=32, help='Factor to increase the number of learned features by')

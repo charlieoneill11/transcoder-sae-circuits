@@ -5,3 +5,4 @@ wandb
 src/z_acts.pt
 error_saes/data
 error_saes/error-saes
+error_saes/regular-sae

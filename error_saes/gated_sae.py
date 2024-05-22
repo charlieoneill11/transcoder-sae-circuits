@@ -187,14 +187,15 @@ class GatedSAE(nn.Module):
         sae_out = self.W_dec(hidden_post) + self.b_dec
 
         per_item_mse_loss = self.per_item_mse_loss_with_target_norm(sae_out, y_error)
-        mse_loss = per_item_mse_loss.mean()
+        mse_loss = per_item_mse_loss.sum(dim=-1).mean()
 
         via_gate_feature_magnitudes = F.relu(hidden_pre_gate)
-        sparsity = via_gate_feature_magnitudes.norm(p=1, dim=1).mean(dim=(0,))
+        #sparsity = via_gate_feature_magnitudes.norm(p=1, dim=1).mean(dim=(0,))
+        sparsity = via_gate_feature_magnitudes.norm(p=1, dim=-1).mean()
         l1_loss = self.l1_coefficient * sparsity
 
         via_gate_reconstruction = self.W_dec(via_gate_feature_magnitudes) + self.b_dec.detach()
-        aux_loss = F.mse_loss(via_gate_reconstruction, y_error, reduction="mean")
+        aux_loss = self.per_item_mse_loss_with_target_norm(via_gate_reconstruction, y_error).sum(dim=-1).mean() #F.mse_loss(via_gate_reconstruction, y_error, reduction="mean")
 
         loss = mse_loss + l1_loss + aux_loss
 
