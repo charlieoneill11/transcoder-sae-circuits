@@ -9,7 +9,7 @@ import torch.optim as optim
 from torch.utils.data import DataLoader
 from typing import Tuple, Union
 from tqdm import trange, tqdm
-from huggingface_hub import HfApi
+from huggingface_hub import HfApi, hf_hub_download
 from transformer_lens import HookedTransformer
 import json
 from gated_sae import GatedSAE
@@ -75,7 +75,11 @@ def get_z_activations(model, batch, layer):
 def get_sae_errors(sae, z_batch):
     sae.eval()
     with torch.no_grad():
-        _, z_recon, _, _, _ = sae(z_batch)
+        # If sae type is not GatedSAE
+        if not isinstance(sae, GatedSAE):
+            _, z_recon, _, _, _ = sae(z_batch)
+        else: # Else, we need z_recon
+            z_recon, _, _ = sae(z_batch, z_batch)
         sae_error = z_batch - z_recon
         assert torch.allclose(z_recon + sae_error, z_batch, rtol=1e-4, atol=1e-4)
         return sae_error
@@ -275,6 +279,72 @@ def main(layer: int, model_type: str, n_batches: int, l1_coefficient: float, bat
     # Finish W&B run
     wandb.finish()
 
+def local_sae_error_main(layer: int, model_type: str, n_batches: int, l1_coefficient: float, batch_size: int, lr: float, projection_up: int, repo_name: str):
+    torch.set_grad_enabled(False)
+    print(f"Running on {device}...")
+
+    # Set the W&B run name
+    run_name = f"{layer}_{l1_coefficient}_{projection_up}"
+
+    # Initialize W&B
+    wandb.init(project=repo_name, name=run_name, config={
+        "layer": layer,
+        "model_type": model_type,
+        "n_batches": n_batches,
+        "l1_coefficient": l1_coefficient,
+        "batch_size": batch_size,
+        "learning_rate": lr,
+        "projection_up": projection_up
+    })
+
+    # Load SAE model
+    layer = 9
+    repo_id = 'charlieoneill/regular-sae'
+    filename = f'sae_layer_{layer}_16.pt'
+
+    # Load from HuggingFace
+    file_path = hf_hub_download(repo_id=repo_id, filename=filename)
+
+    sae = GatedSAE(768, 16*768, l1_coefficient=2)
+    sae.load_state_dict(torch.load(file_path, map_location=torch.device('cpu')))
+
+    # Load the transformer model and activation store
+    hook_point = "blocks.8.hook_resid_pre" # this doesn't matter
+    saes, _ = get_gpt2_res_jb_saes(hook_point)
+    sparse_autoencoder = saes[hook_point]
+    sparse_autoencoder.to(device)
+    sparse_autoencoder.cfg.device = device
+    sparse_autoencoder.cfg.hook_point = f"blocks.{layer}.attn.hook_z"
+    sparse_autoencoder.cfg.store_batch_size = batch_size
+
+    loader = LMSparseAutoencoderSessionloader(sparse_autoencoder.cfg)
+
+    print(f"Loader cfg batch size = {sparse_autoencoder.cfg.store_batch_size} (batch size = {batch_size})")
+
+    # don't overwrite the sparse autoencoder with the loader's sae (newly initialized)
+    tl_model, _, activation_store = loader.load_sae_training_group_session()
+
+    n_input_features = 768
+
+    torch.set_grad_enabled(True)
+    if model_type == 'gated':
+        model = GatedSAE(n_input_features=n_input_features, n_learned_features=n_input_features * projection_up, l1_coefficient=l1_coefficient)
+    else:
+        model = SparseAutoencoder(n_input_features=n_input_features, n_learned_features=n_input_features * projection_up, l1_coefficient=l1_coefficient)
+    
+    model = model.to(device)
+
+    final_recon_loss, final_l0_loss = train_model(model=model, tl_model=tl_model, sae=sae, 
+                                                  n_batches=n_batches, lr=lr, repo_name="regular-sae", 
+                                                  layer=layer, l1_coefficient=l1_coefficient, batch_size=batch_size, 
+                                                  projection_up=projection_up, activation_store=activation_store)
+
+    print(f"Final Reconstruction Error: {final_recon_loss:.4f}")
+    print(f"Final L0 Loss: {final_l0_loss:.4f}")
+
+    # Finish W&B run
+    wandb.finish()
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Train and Save Gated SAE for Transformer Layers")
     parser.add_argument('--layer', type=int, required=True, help='Layer number to train the SAE on')
@@ -291,4 +361,5 @@ if __name__ == '__main__':
     # Print total number of tokens we will train for = batch_size * n_batches * 128
     print(f"Total number of tokens we will train for: {args.batch_size * args.n_batches * 128}")
 
-    main(args.layer, args.model_type, args.n_batches, args.l1_coefficient, args.batch_size, args.lr, args.projection_up, args.repo_name)
+    #main(args.layer, args.model_type, args.n_batches, args.l1_coefficient, args.batch_size, args.lr, args.projection_up, args.repo_name)
+    local_sae_error_main(args.layer, args.model_type, args.n_batches, args.l1_coefficient, args.batch_size, args.lr, args.projection_up, "regular-sae")

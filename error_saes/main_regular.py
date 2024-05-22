@@ -70,8 +70,6 @@ def get_z_activations(model, batch, layer):
         del logits
         del cache
         z = einops.rearrange(z, "b s n d -> (b s) (n d)")
-        # Print norm of z
-        #print(f"Norm of z: {z.norm(dim=-1).mean()}")
     return z
 
 def train_regular_sae(model: Union[GatedSAE, SparseAutoencoder], tl_model, sae, n_batches: int, lr: float, repo_name: str, layer: int, l1_coefficient: float, batch_size: int, projection_up: int, activation_store) -> float:
@@ -101,8 +99,6 @@ def train_regular_sae(model: Union[GatedSAE, SparseAutoencoder], tl_model, sae, 
         z_acts = get_z_activations(tl_model, batch_tokens, layer)
         optimizer.zero_grad()
         sae_out, loss, _ = model(z_acts, z_acts)
-        # Print norm of sae_out
-        #print(f"Norm of sae_out: {sae_out.norm(dim=-1).mean()}")
         loss.backward()
         optimizer.step()
 
@@ -132,12 +128,48 @@ def train_regular_sae(model: Union[GatedSAE, SparseAutoencoder], tl_model, sae, 
         if total_steps in {50000, 100000, 150000, 200000}:
             resample_neurons(model, neuron_activity, optimizer)
 
-        # Save the model locally every 1000 batches
-        if (batch_num + 1) % 1000 == 0:
+        # Save and upload the model every 1000 batches
+        if (batch_num + 1) % 5000 == 0 or batch_num == n_batches - 1:
             local_model_path = f'./{repo_name}/sae_layer_{layer}.pt'
             os.makedirs(os.path.dirname(local_model_path), exist_ok=True)
             torch.save(model.state_dict(), local_model_path)
-            print(f"Model saved locally for batch {batch_num + 1}")
+
+            # Create config dictionary
+            test_loss, recon_loss, l0_loss, dead_neurons = evaluate_model(model, tl_model, activation_store, layer, sae)
+            config = {
+                "layer": layer,
+                "model_type": type(model).__name__,
+                "n_batches": batch_num+1,
+                "l1_coefficient": l1_coefficient,
+                "projection_up": projection_up,
+                "batch_size": batch_size,
+                "learning_rate": lr,
+                "test_loss": test_loss,
+                "reconstruction_error": recon_loss,
+                "l0_loss": l0_loss,
+                "dead_neurons_percentage": dead_neurons
+            }
+
+            # Save config to JSON file
+            config_path = f'./{repo_name}/config_layer_{layer}_{projection_up}.json'
+            with open(config_path, 'w') as f:
+                json.dump(config, f, indent=4)
+
+            # Upload model and config to Hugging Face
+            api = HfApi(token="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")
+            api.upload_file(
+                path_or_fileobj=local_model_path,
+                path_in_repo=f'sae_layer_{layer}_{projection_up}.pt',
+                repo_id=f'charlieoneill/{repo_name}',
+                token="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"
+            )
+            api.upload_file(
+                path_or_fileobj=config_path,
+                path_in_repo=f'config_layer_{layer}_{projection_up}.json',
+                repo_id=f'charlieoneill/{repo_name}',
+                token="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"
+            )
+            print(f"Model and config saved and uploaded for batch {batch_num + 1}")
 
     return recon_loss, l0_loss
 
@@ -240,12 +272,12 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Train and Save Regular SAE for Transformer Layers")
     parser.add_argument('--layer', type=int, required=True, help='Layer number to train the SAE on')
     parser.add_argument('--model_type', type=str, default='gated', choices=['gated', 'vanilla'], help='Type of SAE model to train')
-    parser.add_argument('--n_batches', type=int, default=5000, help='Number of training batches')
+    parser.add_argument('--n_batches', type=int, default=2500, help='Number of training batches')
     parser.add_argument('--l1_coefficient', type=float, default=2, help='L1 regularisation coefficient')
-    parser.add_argument('--batch_size', type=int, default=4, help='Batch size for training')
+    parser.add_argument('--batch_size', type=int, default=64, help='Batch size for training')
     parser.add_argument('--lr', type=float, default=0.001, help='Learning rate for training')
-    parser.add_argument('--projection_up', type=int, default=32, help='Factor to increase the number of learned features by')
-    parser.add_argument('--repo_name', type=str, default="regular-sae", help='Repository name to save the model locally')
+    parser.add_argument('--projection_up', type=int, default=16, help='Factor to increase the number of learned features by')
+    parser.add_argument('--repo_name', type=str, default="regular-sae", help='HuggingFace repository name to save the model')
 
     args = parser.parse_args()
 
