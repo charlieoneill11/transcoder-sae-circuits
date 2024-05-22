@@ -4,6 +4,7 @@
 
 
 # %%
+
 import torch
 import time
 import plotly.express as px
@@ -20,24 +21,14 @@ from data.greater_than_dataset import GT_GROUND_TRUTH_HEADS
 
 from utils import get_attn_head_roc
 
-# %%
-truths = torch.load("data/ground_truth.pt")
-
-# %%
-imshow(GT_GROUND_TRUTH_HEADS)
-
-
-
-
-
-
 
 # %%
 torch.set_grad_enabled(False)
 
-# %%
 
-dataset_prompts = gen_templated_prompts(template_idex=1)
+
+# %%
+dataset_prompts = gen_templated_prompts(template_idex=1, N=500)
 
 # dataset_prompts = generate_greater_than_dataset(N=100)
 
@@ -54,7 +45,7 @@ def component_filter(component: str):
         CircuitComponent.EMBED,
         CircuitComponent.POS_EMBED,
         # CircuitComponent.BIAS_O,
-        CircuitComponent.Z_SAE_ERROR,
+        # CircuitComponent.Z_SAE_ERROR,
         # CircuitComponent.Z_SAE_BIAS,
         # CircuitComponent.TRANSCODER_ERROR,
         # CircuitComponent.TRANSCODER_BIAS,
@@ -79,6 +70,7 @@ N = 30
 
 thres = 4
 
+
 # # Danny and Charlie... Charlie gave shit to Danny
 # # Danny and Charlie... Charlie gave shit to Charlie
 # # Danny and Charlie... Danny gave shit to Danny
@@ -101,10 +93,95 @@ def strategy(cd: CircuitDiscovery):
 task_eval = TaskEvaluation(prompts=dataset_prompts, eval_index=-2, circuit_discovery_strategy=strategy, allowed_components_filter=component_filter)
 
 
-a = task_eval.get_attn_head_freqs_over_dataset(N=N, return_freqs=True)
+# a = task_eval.get_attn_head_freqs_over_dataset(N=N, return_freqs=True)
 
 # cd = task_eval.get_circuit_discovery_for_prompt(11)
 # cd.print_attn_heads_and_mlps_in_graph()
+
+# %%
+f = task_eval.get_features_at_heads_over_dataset(N=30)
+
+# %%
+N = 300
+
+counts = task_eval.get_feature_count_for_heads_over_dataset(N=N)
+# %%
+layer = 9
+head = 9
+num_samples = 50
+
+data = counts.get_feature_counts_for_head_over_range(layer, head, N, num_samples=num_samples)
+layer_data = counts.get_feature_counts_for_layer_over_range(layer, N, num_samples=num_samples)
+
+
+px.line(
+    x=list(data.keys()),
+    y=list(data.values()),
+    labels={"x": "# IOI Sample Prompts", "y": "# Unique Features"},
+    title=f"Unique features associated with L{layer}H{head}"
+).show()
+
+
+px.line(
+    x=list(layer_data.keys()),
+    y=list(layer_data.values()),
+    labels={"x": "# IOI Sample Prompts", "y": "# Unique Features"},
+    title=f"Unique features associated with Layer {layer}"
+).show()
+
+# %%
+counts.get_feature_set_for_head(layer, head)
+
+
+# %%
+i = 3
+cd = task_eval.get_circuit_discovery_for_prompt(i)
+cd.print_attn_heads_and_mlps_in_graph()
+
+# %%
+cd.visualize_graph()
+
+# %%
+cd.component_lens_at_loc([0, 0, 'q'])
+
+# %%
+cd.visualize_attn_heads_in_graph()
+
+
+
+# %%
+cd.component_lens_at_loc([1, 0, 'q', 4, 0, 'q', 1])
+
+
+# %%
+imshow(a)
+
+
+
+
+
+# %%
+f
+
+# %%
+of
+
+# %%
+f[6][9]
+
+# %%
+imshow(a)
+
+# %%
+import random
+
+random.sample([2, 3, 4], k=2)
+
+
+
+
+
+
 
 # %%
 attn_freqs = task_eval.get_attn_head_freqs_over_dataset(N=N, subtract_counter_factuals=True, return_freqs=True)

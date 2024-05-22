@@ -1,9 +1,10 @@
 import torch
 import plotly.express as px
+import random
 
 from circuit_discovery import CircuitDiscovery, all_allowed
 from circuit_lens import get_model_encoders
-from typing import List, Callable
+from typing import List, Callable, Set
 from transformer_lens import ActivationCache
 from transformer_lens.hook_points import HookPoint
 from data.eval_dataset import EvalItem
@@ -11,7 +12,82 @@ from tqdm import trange
 from plotly_utils import *
 from functools import partial
 
+
 Z_FILTER = lambda x: x.endswith("z")
+
+
+class FeatureCountForHeads:
+    def __init__(self, features_for_heads_over_dataset: List[List[List[Set]]]):
+        self.featuers_for_heads_over_dataset = features_for_heads_over_dataset
+
+    def get_feature_counts_for_head_over_range(
+        self, layer, head, N, num_samples=10, visualize=True
+    ):
+        counts = {0: 0.0}
+
+        for i in trange(1, N):
+            total = 0
+
+            for _ in range(num_samples):
+                sample_data = random.sample(self.featuers_for_heads_over_dataset, k=i)
+
+                sample_set = set()
+
+                for data_point in sample_data:
+                    sample_set.update(data_point[layer][head])
+
+                total += len(sample_set)
+
+            counts[i] = total / num_samples
+
+        if visualize:
+            px.line(
+                x=list(counts.keys()),
+                y=list(counts.values()),
+                labels={"x": "# IOI Sample Prompts", "y": "# Unique Features"},
+                title=f"Unique features associated with L{layer}H{head}",
+            ).show()
+
+        return counts
+
+    def get_feature_counts_for_layer_over_range(
+        self, layer, N, num_samples=10, visualize=True
+    ):
+        counts = {0: 0.0}
+
+        for i in trange(1, N):
+            total = 0
+
+            for _ in range(num_samples):
+                sample_data = random.sample(self.featuers_for_heads_over_dataset, k=i)
+
+                sample_set = set()
+
+                for data_point in sample_data:
+                    for head_set in data_point[layer]:
+                        sample_set.update(head_set)
+
+                total += len(sample_set)
+
+            counts[i] = total / num_samples
+
+        if visualize:
+            px.line(
+                x=list(counts.keys()),
+                y=list(counts.values()),
+                labels={"x": "# IOI Sample Prompts", "y": "# Unique Features"},
+                title=f"Unique features associated with Layer {layer}",
+            ).show()
+
+        return counts
+
+    def get_feature_set_for_head(self, layer, head):
+        feature_set = set()
+
+        for data_point in self.featuers_for_heads_over_dataset:
+            feature_set.update(data_point[layer][head])
+
+        return feature_set
 
 
 class TaskEvaluation:
@@ -175,6 +251,44 @@ class TaskEvaluation:
 
         if return_freqs:
             return head_freqs
+
+    def get_features_at_heads_over_dataset(self, N=None):
+        if N is None:
+            N = len(self.prompts)
+
+        n_layers = self.model.cfg.n_layers
+        n_heads = self.model.cfg.n_heads
+
+        features_for_heads = [[set() for _ in range(n_heads)] for _ in range(n_layers)]
+
+        for i in trange(N):
+            cd = self.get_circuit_discovery_for_prompt(i)
+
+            prompt_features_for_heads = cd.get_features_at_heads_in_graph()
+
+            for layer in range(n_layers):
+                for head in range(n_heads):
+                    features_for_heads[layer][head].update(
+                        prompt_features_for_heads[layer][head]
+                    )
+
+        return features_for_heads
+
+    def get_feature_count_for_heads_over_dataset(self, N=None):
+        if N is None:
+            N = len(self.prompts)
+
+        n_layers = self.model.cfg.n_layers
+        n_heads = self.model.cfg.n_heads
+
+        data = []
+
+        for i in trange(N):
+            cd = self.get_circuit_discovery_for_prompt(i)
+
+            data.append(cd.get_features_at_heads_in_graph())
+
+        return FeatureCountForHeads(data)
 
     def get_faithfulness_curve_over_data(
         self, eval_n, attn_head_freq_n, faithfulness_intervals: int = 10, visualize=True
