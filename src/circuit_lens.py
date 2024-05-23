@@ -339,7 +339,11 @@ class ComponentLens:
     @property
     def tuple_id(self):
         if self.component == CircuitComponent.UNEMBED:
-            return (self.component, self.run_data["seq_index"], self.run_data["token"])
+            return (
+                self.component,
+                self.run_data["seq_index"],
+                self.run_data["token_id"],
+            )
         elif self.component == CircuitComponent.UNEMBED_AT_TOKEN:
             return (self.component, self.run_data["seq_index"])
         elif self.component == CircuitComponent.ATTN_HEAD:
@@ -360,13 +364,24 @@ class ComponentLens:
             )
 
     @classmethod
-    def create_root_unembed_lens(cls, circuit_lens: "CircuitLens", seq_index):
+    def create_unembed_at_token_lens(cls, circuit_lens: "CircuitLens", seq_index):
         return cls(
             circuit_lens=circuit_lens,
             component=CircuitComponent.UNEMBED_AT_TOKEN,
             run_data={
                 "seq_index": seq_index,
             },
+        )
+
+    @classmethod
+    def create_unembed_lens(cls, circuit_lens: "CircuitLens", seq_index, token):
+        if isinstance(token, str):
+            token = circuit_lens.model.to_single_token(token)
+
+        return cls(
+            circuit_lens=circuit_lens,
+            component=CircuitComponent.UNEMBED,
+            run_data={"seq_index": seq_index, "token_id": token},
         )
 
     def __str__(self):
@@ -481,8 +496,12 @@ def get_model_encoders(device):
 
     model = HookedTransformer.from_pretrained("gpt2-small", device=device)
 
+    print()
+    print("Loading SAEs...")
     z_saes = [ZSAE.load_zsae_for_layer(i) for i in trange(model.cfg.n_layers)]
 
+    print()
+    print("Loading Transcoders...")
     mlp_transcoders = [
         SparseTranscoder.load_from_hugging_face(i) for i in trange(model.cfg.n_layers)
     ]
@@ -503,6 +522,9 @@ class CircuitLens:
 
         self.prompt = prompt
         self.tokens = self.model.to_tokens(prompt)
+
+        if self.tokens.size(0) != 1:
+            raise ValueError("Can only do CircuitLens on a single prompt!")
 
         self.logits, self.cache = self.model.run_with_cache(
             self.tokens, return_type="logits"
@@ -544,7 +566,7 @@ class CircuitLens:
         values = [torch.stack([t1, t1])]
         features = [torch.stack([t0, t0])]
 
-        for layer in trange(self.model.cfg.n_layers):
+        for layer in range(self.model.cfg.n_layers):
             # First handle attention
             z_sae = self.z_saes[layer]
 

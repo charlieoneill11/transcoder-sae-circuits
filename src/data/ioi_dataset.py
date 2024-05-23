@@ -14,6 +14,72 @@ import matplotlib.pyplot as plt
 import random as rd
 import copy
 
+from data.eval_dataset import EvalItem
+
+IOI_GROUND_TRUTH_DATA = torch.load("data/ioi_ground_truth.pt")
+
+IOI_GROUND_TRUTH_HEADS = torch.zeros(12, 12)
+
+for layer, head in IOI_GROUND_TRUTH_DATA:
+    IOI_GROUND_TRUTH_HEADS[layer, head] = 1
+
+
+SINGLE_TOKEN_NAMES = [
+    "Michael",
+    "Christopher",
+    "Jessica",
+    "Matthew",
+    "Jennifer",
+    "Joshua",
+    "Daniel",
+    "David",
+    "James",
+    "Robert",
+    "John",
+    "Joseph",
+    "Andrew",
+    "Ryan",
+    "Brandon",
+    "Jason",
+    "Justin",
+    "Sarah",
+    "William",
+    "Jonathan",
+    "Brian",
+    "Anthony",
+    "Eric",
+    "Elizabeth",
+    "Adam",
+    "Kevin",
+    "Steven",
+    "Thomas",
+    "Kyle",
+    "Rachel",
+    "Laura",
+    "Richard",
+    "Amy",
+    "Crystal",
+    "Michelle",
+    "Jeremy",
+    "Mark",
+    "Emily",
+    "Aaron",
+    "Charles",
+    "Jacob",
+    "Stephen",
+    "Patrick",
+    "Sean",
+    "Jamie",
+    "Kelly",
+    "Paul",
+    "Tyler",
+    "Scott",
+    "Mary",
+    "Lisa",
+    "Jose",
+    "Alexander",
+]
+
 NAMES = [
     "Michael",
     "Christopher",
@@ -129,62 +195,121 @@ BAC_TEMPLATES = [
 ]
 
 BABA_TEMPLATES = [
-    "Then, [B] and [A] went to the [PLACE]. [B] gave a [OBJECT] to [A]",
-    "Then, [B] and [A] had a lot of fun at the [PLACE]. [B] gave a [OBJECT] to [A]",
-    "Then, [B] and [A] were working at the [PLACE]. [B] decided to give a [OBJECT] to [A]",
-    "Then, [B] and [A] were thinking about going to the [PLACE]. [B] wanted to give a [OBJECT] to [A]",
-    "Then, [B] and [A] had a long argument, and afterwards [B] said to [A]",
-    "After [B] and [A] went to the [PLACE], [B] gave a [OBJECT] to [A]",
-    "When [B] and [A] got a [OBJECT] at the [PLACE], [B] decided to give it to [A]",
-    "When [B] and [A] got a [OBJECT] at the [PLACE], [B] decided to give the [OBJECT] to [A]",
-    "While [B] and [A] were working at the [PLACE], [B] gave a [OBJECT] to [A]",
-    "While [B] and [A] were commuting to the [PLACE], [B] gave a [OBJECT] to [A]",
-    "After the lunch, [B] and [A] went to the [PLACE]. [B] gave a [OBJECT] to [A]",
-    "Afterwards, [B] and [A] went to the [PLACE]. [B] gave a [OBJECT] to [A]",
-    "Then, [B] and [A] had a long argument. Afterwards [B] said to [A]",
-    "The [PLACE] [B] and [A] went to had a [OBJECT]. [B] gave it to [A]",
-    "Friends [B] and [A] found a [OBJECT] at the [PLACE]. [B] gave it to [A]",
+    "Then, [B] and [A] went to the [PLACE]. [B] gave a [OBJECT] to",
+    "Then, [B] and [A] had a lot of fun at the [PLACE]. [B] gave a [OBJECT] to",
+    "Then, [B] and [A] were working at the [PLACE]. [B] decided to give a [OBJECT] to",
+    "Then, [B] and [A] were thinking about going to the [PLACE]. [B] wanted to give a [OBJECT] to",
+    "Then, [B] and [A] had a long argument, and afterwards [B] said to",
+    "After [B] and [A] went to the [PLACE], [B] gave a [OBJECT] to",
+    "When [B] and [A] got a [OBJECT] at the [PLACE], [B] decided to give it to",
+    "When [B] and [A] got a [OBJECT] at the [PLACE], [B] decided to give the [OBJECT] to",
+    "While [B] and [A] were working at the [PLACE], [B] gave a [OBJECT] to",
+    "While [B] and [A] were commuting to the [PLACE], [B] gave a [OBJECT] to",
+    "After the lunch, [B] and [A] went to the [PLACE]. [B] gave a [OBJECT] to",
+    "Afterwards, [B] and [A] went to the [PLACE]. [B] gave a [OBJECT] to",
+    "Then, [B] and [A] had a long argument. Afterwards [B] said to",
+    "The [PLACE] [B] and [A] went to had a [OBJECT]. [B] gave it to",
+    "Friends [B] and [A] found a [OBJECT] at the [PLACE]. [B] gave it to",
 ]
 
 BABA_LONG_TEMPLATES = [
-    "Then in the morning, [B] and [A] went to the [PLACE]. [B] gave a [OBJECT] to [A]",
-    "Then in the morning, [B] and [A] had a lot of fun at the [PLACE]. [B] gave a [OBJECT] to [A]",
-    "Then in the morning, [B] and [A] were working at the [PLACE]. [B] decided to give a [OBJECT] to [A]",
-    "Then in the morning, [B] and [A] were thinking about going to the [PLACE]. [B] wanted to give a [OBJECT] to [A]",
-    "Then in the morning, [B] and [A] had a long argument, and afterwards [B] said to [A]",
-    "After taking a long break [B] and [A] went to the [PLACE], [B] gave a [OBJECT] to [A]",
-    "When soon afterwards [B] and [A] got a [OBJECT] at the [PLACE], [B] decided to give it to [A]",
-    "When soon afterwards [B] and [A] got a [OBJECT] at the [PLACE], [B] decided to give the [OBJECT] to [A]",
-    "While spending time together [B] and [A] were working at the [PLACE], [B] gave a [OBJECT] to [A]",
-    "While spending time together [B] and [A] were commuting to the [PLACE], [B] gave a [OBJECT] to [A]",
-    "After the lunch in the afternoon, [B] and [A] went to the [PLACE]. [B] gave a [OBJECT] to [A]",
-    "Afterwards, while spending time together [B] and [A] went to the [PLACE]. [B] gave a [OBJECT] to [A]",
-    "Then in the morning afterwards, [B] and [A] had a long argument. Afterwards [B] said to [A]",
-    "The local big [PLACE] [B] and [A] went to had a [OBJECT]. [B] gave it to [A]",
-    "Friends separated at birth [B] and [A] found a [OBJECT] at the [PLACE]. [B] gave it to [A]",
+    "Then in the morning, [B] and [A] went to the [PLACE]. [B] gave a [OBJECT] to",
+    "Then in the morning, [B] and [A] had a lot of fun at the [PLACE]. [B] gave a [OBJECT] to",
+    "Then in the morning, [B] and [A] were working at the [PLACE]. [B] decided to give a [OBJECT] to",
+    "Then in the morning, [B] and [A] were thinking about going to the [PLACE]. [B] wanted to give a [OBJECT] to",
+    "Then in the morning, [B] and [A] had a long argument, and afterwards [B] said to",
+    "After taking a long break [B] and [A] went to the [PLACE], [B] gave a [OBJECT] to",
+    "When soon afterwards [B] and [A] got a [OBJECT] at the [PLACE], [B] decided to give it to",
+    "When soon afterwards [B] and [A] got a [OBJECT] at the [PLACE], [B] decided to give the [OBJECT] to",
+    "While spending time together [B] and [A] were working at the [PLACE], [B] gave a [OBJECT] to",
+    "While spending time together [B] and [A] were commuting to the [PLACE], [B] gave a [OBJECT] to",
+    "After the lunch in the afternoon, [B] and [A] went to the [PLACE]. [B] gave a [OBJECT] to",
+    "Afterwards, while spending time together [B] and [A] went to the [PLACE]. [B] gave a [OBJECT] to",
+    "Then in the morning afterwards, [B] and [A] had a long argument. Afterwards [B] said to",
+    "The local big [PLACE] [B] and [A] went to had a [OBJECT]. [B] gave it to",
+    "Friends separated at birth [B] and [A] found a [OBJECT] at the [PLACE]. [B] gave it to",
 ]
 
 BABA_LATE_IOS = [
-    "Then, [B] and [A] went to the [PLACE]. [B] gave a [OBJECT] to [A]",
-    "Then, [B] and [A] had a lot of fun at the [PLACE]. [B] gave a [OBJECT] to [A]",
-    "Then, [B] and [A] were working at the [PLACE]. [B] decided to give a [OBJECT] to [A]",
-    "Then, [B] and [A] were thinking about going to the [PLACE]. [B] wanted to give a [OBJECT] to [A]",
-    "Then, [B] and [A] had a long argument and after that [B] said to [A]",
-    "After the lunch, [B] and [A] went to the [PLACE]. [B] gave a [OBJECT] to [A]",
-    "Afterwards, [B] and [A] went to the [PLACE]. [B] gave a [OBJECT] to [A]",
-    "Then, [B] and [A] had a long argument. Afterwards [B] said to [A]",
+    "Then, [B] and [A] went to the [PLACE]. [B] gave a [OBJECT] to",
+    "Then, [B] and [A] had a lot of fun at the [PLACE]. [B] gave a [OBJECT] to",
+    "Then, [B] and [A] were working at the [PLACE]. [B] decided to give a [OBJECT] to",
+    "Then, [B] and [A] were thinking about going to the [PLACE]. [B] wanted to give a [OBJECT] to",
+    "Then, [B] and [A] had a long argument and after that [B] said to",
+    "After the lunch, [B] and [A] went to the [PLACE]. [B] gave a [OBJECT] to",
+    "Afterwards, [B] and [A] went to the [PLACE]. [B] gave a [OBJECT] to",
+    "Then, [B] and [A] had a long argument. Afterwards [B] said to",
 ]
 
 BABA_EARLY_IOS = [
-    "Then [B] and [A] went to the [PLACE], and [B] gave a [OBJECT] to [A]",
-    "Then [B] and [A] had a lot of fun at the [PLACE], and [B] gave a [OBJECT] to [A]",
-    "Then [B] and [A] were working at the [PLACE], and [B] decided to give a [OBJECT] to [A]",
-    "Then [B] and [A] were thinking about going to the [PLACE], and [B] wanted to give a [OBJECT] to [A]",
-    "Then [B] and [A] had a long argument, and after that [B] said to [A]",
-    "After the lunch [B] and [A] went to the [PLACE], and [B] gave a [OBJECT] to [A]",
-    "Afterwards [B] and [A] went to the [PLACE], and [B] gave a [OBJECT] to [A]",
-    "Then [B] and [A] had a long argument, and afterwards [B] said to [A]",
+    "Then [B] and [A] went to the [PLACE], and [B] gave a [OBJECT] to",
+    "Then [B] and [A] had a lot of fun at the [PLACE], and [B] gave a [OBJECT] to",
+    "Then [B] and [A] were working at the [PLACE], and [B] decided to give a [OBJECT] to",
+    "Then [B] and [A] were thinking about going to the [PLACE], and [B] wanted to give a [OBJECT] to",
+    "Then [B] and [A] had a long argument, and after that [B] said to",
+    "After the lunch [B] and [A] went to the [PLACE], and [B] gave a [OBJECT] to",
+    "Afterwards [B] and [A] went to the [PLACE], and [B] gave a [OBJECT] to",
+    "Then [B] and [A] had a long argument, and afterwards [B] said to",
 ]
+
+
+# BABA_TEMPLATES = [
+#     "Then, [B] and [A] went to the [PLACE]. [B] gave a [OBJECT] to [A]",
+#     "Then, [B] and [A] had a lot of fun at the [PLACE]. [B] gave a [OBJECT] to [A]",
+#     "Then, [B] and [A] were working at the [PLACE]. [B] decided to give a [OBJECT] to [A]",
+#     "Then, [B] and [A] were thinking about going to the [PLACE]. [B] wanted to give a [OBJECT] to [A]",
+#     "Then, [B] and [A] had a long argument, and afterwards [B] said to [A]",
+#     "After [B] and [A] went to the [PLACE], [B] gave a [OBJECT] to [A]",
+#     "When [B] and [A] got a [OBJECT] at the [PLACE], [B] decided to give it to [A]",
+#     "When [B] and [A] got a [OBJECT] at the [PLACE], [B] decided to give the [OBJECT] to [A]",
+#     "While [B] and [A] were working at the [PLACE], [B] gave a [OBJECT] to [A]",
+#     "While [B] and [A] were commuting to the [PLACE], [B] gave a [OBJECT] to [A]",
+#     "After the lunch, [B] and [A] went to the [PLACE]. [B] gave a [OBJECT] to [A]",
+#     "Afterwards, [B] and [A] went to the [PLACE]. [B] gave a [OBJECT] to [A]",
+#     "Then, [B] and [A] had a long argument. Afterwards [B] said to [A]",
+#     "The [PLACE] [B] and [A] went to had a [OBJECT]. [B] gave it to [A]",
+#     "Friends [B] and [A] found a [OBJECT] at the [PLACE]. [B] gave it to [A]",
+# ]
+
+# BABA_LONG_TEMPLATES = [
+#     "Then in the morning, [B] and [A] went to the [PLACE]. [B] gave a [OBJECT] to [A]",
+#     "Then in the morning, [B] and [A] had a lot of fun at the [PLACE]. [B] gave a [OBJECT] to [A]",
+#     "Then in the morning, [B] and [A] were working at the [PLACE]. [B] decided to give a [OBJECT] to [A]",
+#     "Then in the morning, [B] and [A] were thinking about going to the [PLACE]. [B] wanted to give a [OBJECT] to [A]",
+#     "Then in the morning, [B] and [A] had a long argument, and afterwards [B] said to [A]",
+#     "After taking a long break [B] and [A] went to the [PLACE], [B] gave a [OBJECT] to [A]",
+#     "When soon afterwards [B] and [A] got a [OBJECT] at the [PLACE], [B] decided to give it to [A]",
+#     "When soon afterwards [B] and [A] got a [OBJECT] at the [PLACE], [B] decided to give the [OBJECT] to [A]",
+#     "While spending time together [B] and [A] were working at the [PLACE], [B] gave a [OBJECT] to [A]",
+#     "While spending time together [B] and [A] were commuting to the [PLACE], [B] gave a [OBJECT] to [A]",
+#     "After the lunch in the afternoon, [B] and [A] went to the [PLACE]. [B] gave a [OBJECT] to [A]",
+#     "Afterwards, while spending time together [B] and [A] went to the [PLACE]. [B] gave a [OBJECT] to [A]",
+#     "Then in the morning afterwards, [B] and [A] had a long argument. Afterwards [B] said to [A]",
+#     "The local big [PLACE] [B] and [A] went to had a [OBJECT]. [B] gave it to [A]",
+#     "Friends separated at birth [B] and [A] found a [OBJECT] at the [PLACE]. [B] gave it to [A]",
+# ]
+
+# BABA_LATE_IOS = [
+#     "Then, [B] and [A] went to the [PLACE]. [B] gave a [OBJECT] to [A]",
+#     "Then, [B] and [A] had a lot of fun at the [PLACE]. [B] gave a [OBJECT] to [A]",
+#     "Then, [B] and [A] were working at the [PLACE]. [B] decided to give a [OBJECT] to [A]",
+#     "Then, [B] and [A] were thinking about going to the [PLACE]. [B] wanted to give a [OBJECT] to [A]",
+#     "Then, [B] and [A] had a long argument and after that [B] said to [A]",
+#     "After the lunch, [B] and [A] went to the [PLACE]. [B] gave a [OBJECT] to [A]",
+#     "Afterwards, [B] and [A] went to the [PLACE]. [B] gave a [OBJECT] to [A]",
+#     "Then, [B] and [A] had a long argument. Afterwards [B] said to [A]",
+# ]
+
+# BABA_EARLY_IOS = [
+#     "Then [B] and [A] went to the [PLACE], and [B] gave a [OBJECT] to [A]",
+#     "Then [B] and [A] had a lot of fun at the [PLACE], and [B] gave a [OBJECT] to [A]",
+#     "Then [B] and [A] were working at the [PLACE], and [B] decided to give a [OBJECT] to [A]",
+#     "Then [B] and [A] were thinking about going to the [PLACE], and [B] wanted to give a [OBJECT] to [A]",
+#     "Then [B] and [A] had a long argument, and after that [B] said to [A]",
+#     "After the lunch [B] and [A] went to the [PLACE], and [B] gave a [OBJECT] to [A]",
+#     "Afterwards [B] and [A] went to the [PLACE], and [B] gave a [OBJECT] to [A]",
+#     "Then [B] and [A] had a long argument, and afterwards [B] said to [A]",
+# ]
 
 TEMPLATES_VARIED_MIDDLE = [
     "",
@@ -335,6 +460,28 @@ def gen_prompt_uniform(
             )
             nb_gen += 1
     return ioi_prompts
+
+
+def gen_templated_prompts(
+    prompt_type="mixed", template_idex=0, N=100, symmetric=False
+) -> List[EvalItem]:
+    assert prompt_type in ("abba", "baba", "mixed")
+
+    if prompt_type == "abba":
+        templates = [ABBA_TEMPLATES[template_idex]]
+    elif prompt_type == "baba":
+        templates = [BABA_TEMPLATES[template_idex]]
+    elif prompt_type == "mixed":
+        templates = [ABBA_TEMPLATES[template_idex], BABA_TEMPLATES[template_idex]]
+
+    prompts = gen_prompt_uniform(
+        templates, SINGLE_TOKEN_NAMES, NOUNS_DICT, N, symmetric
+    )
+
+    return [
+        {"text": p["text"], "correct": " " + p["IO"], "counter": " " + p["S"]}
+        for p in prompts
+    ]
 
 
 def gen_flipped_prompts(prompts, names, flip=("S2", "IO")):
