@@ -1,6 +1,7 @@
 import torch
 import plotly.express as px
 import random
+import einops
 
 from circuit_discovery import CircuitDiscovery, all_allowed
 from circuit_lens import get_model_encoders
@@ -11,6 +12,7 @@ from data.eval_dataset import EvalItem
 from tqdm import trange
 from plotly_utils import *
 from functools import partial
+from data.ioi_dataset import IOI_GROUND_TRUTH_HEADS
 
 
 Z_FILTER = lambda x: x.endswith("z")
@@ -296,10 +298,16 @@ class TaskEvaluation:
         return FeatureCountForHeads(data)
 
     def get_faithfulness_curve_over_data(
-        self, eval_n, attn_head_freq_n, faithfulness_intervals: int = 10, visualize=True
+        self,
+        N,
+        attn_head_freq_n,
+        faithfulness_intervals: int = 10,
+        visualize=True,
+        rand=False,
+        ioi_ground=False,
     ):
         answer_tokens = []
-        for i in range(eval_n):
+        for i in range(N):
             answer_tokens.append(
                 (
                     self.model.to_single_token(self.prompts[i]["correct"]),
@@ -309,6 +317,15 @@ class TaskEvaluation:
 
         answer_tokens = torch.tensor(answer_tokens).to(self.device)
 
+        tokens = self.model.to_tokens(self.str_prompts[:N])
+        base_logits = self.model(tokens, return_type="logits")
+        base_dist = base_logits[:, self.eval_index, :].softmax(dim=-1)
+
+        def kl_div(logits):
+            logits = logits[:, self.eval_index, :].log_softmax(dim=-1)
+
+            return torch.kl_div(logits, base_dist).sum()
+
         def logits_to_ave_diff(logits, answer_tokens=answer_tokens):
             logits = logits[:, self.eval_index, :]
             print(logits.shape, answer_tokens.shape)
@@ -317,10 +334,19 @@ class TaskEvaluation:
 
             return answer_logit_diff.mean()
 
-        attn_freqs = self.get_attn_head_freqs_over_dataset(
-            return_freqs=True, N=attn_head_freq_n
-        )
+        if ioi_ground or rand:
+            attn_freqs = IOI_GROUND_TRUTH_HEADS.float().to("cuda")
+            attn_freqs += torch.rand_like(attn_freqs) * 0.001
+        else:
+            attn_freqs = self.get_attn_head_freqs_over_dataset(
+                return_freqs=True, N=attn_head_freq_n, visualize=False
+            )
         assert attn_freqs is not None
+
+        if rand:
+            attn_freqs = torch.rand_like(attn_freqs)
+
+        # imshow(attn_freqs)
 
         flattened_indices = torch.argsort(attn_freqs.view(-1), descending=True)
 
@@ -334,61 +360,91 @@ class TaskEvaluation:
         )
 
         def z_ablate_all(acts, hook: HookPoint):
-            return torch.zeros_like(acts)
+            mean_acts = einops.repeat(
+                self.mean_cache[hook.name], "... -> B ...", B=acts.size(0)
+            )
 
-        tokens = self.model.to_tokens(self.str_prompts[:eval_n])
+            return mean_acts
+            # print("ablating!", hook.name)
+            # return
+            # return torch.zeros_like(acts)
 
         corrupted_logits = self.model.run_with_hooks(
             tokens, fwd_hooks=[(Z_FILTER, z_ablate_all)], return_type="logits"
         )
-        base_logits = self.model(tokens, return_type="logits")
 
         corrupted_diff = logits_to_ave_diff(corrupted_logits)
         base_diff = logits_to_ave_diff(base_logits)
 
-        print("base cor", base_diff, corrupted_diff)
+        # print("base cor", base_diff, corrupted_diff)
 
-        def logits_to_normalized_diff(logits):
-            return (logits_to_ave_diff(logits) - corrupted_diff) / (
-                base_diff - corrupted_diff
+        corrupted_kl = kl_div(corrupted_logits)
+
+        # print("corrupted kl", corrupted_kl)
+
+        def normalized_kl(logits):
+            return (kl_div(logits) - corrupted_kl) / (-corrupted_kl)
+
+        # def logits_to_normalized_diff(logits):
+        #     return (logits_to_ave_diff(logits) - corrupted_diff) / (
+        #         base_diff - corrupted_diff
+        #     )
+
+        faithfulness_curve = {0: 0.0}
+
+        def z_ablate_hook(acts, hook: HookPoint, heads_to_keep):
+            heads_to_keep_at_layer = heads_to_keep[hook.layer()]
+
+            # print("ablate", hook.name, heads_to_keep_at_layer)
+
+            mean_acts = einops.repeat(
+                self.mean_cache[hook.name], "... -> B ...", B=acts.size(0)
             )
 
-        faithfulness_curve = {}
-
-        def z_ablate_hook(acts, hook: HookPoint, heads_to_ablate_by_layer):
-            heads_to_ablate = heads_to_ablate_by_layer[hook.layer()]
-
-            acts[:, :, heads_to_ablate, :] = 0
+            for head in range(self.model.cfg.n_heads):
+                if head not in heads_to_keep_at_layer:
+                    # acts[:, :, head, :] = torch.zeros_like(acts[:, :, head, :])
+                    acts[:, :, head, :] = mean_acts[:, :, head, :]
 
             return acts
 
-        for i in range(1, faithfulness_intervals + 1):
+        print("hbi", heads_by_importance)
+
+        i = 0
+        while True:
+            i += 1
+            # for i in range(1, faithfulness_intervals + 2):
             num_heads = i * heads_per_faithfulness_interval
             heads = heads_by_importance[:num_heads]
+            # print("ik", num_heads)
 
             # print("heasd", heads)
             # raise ValueError("yeah")
 
-            heads_to_ablate_by_layer = [[] for _ in range(self.model.cfg.n_layers)]
+            heads_to_keep = [[] for _ in range(self.model.cfg.n_layers)]
 
-            for layer in range(self.model.cfg.n_layers):
-                for head in range(self.model.cfg.n_heads):
-                    if [layer, head] not in heads:
-                        heads_to_ablate_by_layer[layer].append(head)
+            for layer, head in heads:
+                heads_to_keep[layer].append(head)
 
-            hook = partial(
-                z_ablate_hook, heads_to_ablate_by_layer=heads_to_ablate_by_layer
-            )
+            # for layer in range(self.model.cfg.n_layers):
+            #     for head in range(self.model.cfg.n_heads):
+            #         if [layer, head] not in heads:
+            #             heads_to_ablate_by_layer[layer].append(head)
+
+            hook = partial(z_ablate_hook, heads_to_keep=heads_to_keep)
 
             logits_for_heads = self.model.run_with_hooks(
                 tokens, fwd_hooks=[(Z_FILTER, hook)], return_type="logits"
             )
 
-            faithfulness_curve[len(heads)] = logits_to_normalized_diff(
-                logits_for_heads
-            ).item()
+            faithfulness_curve[len(heads)] = normalized_kl(logits_for_heads).item()
 
-            if num_heads == len(heads_by_importance):
+            # normalized_kl
+            # faithfulness_curve[len(heads)] = logits_to_normalized_diff(
+            #     logits_for_heads
+            # ).item()
+
+            if len(heads) >= self.model.cfg.n_heads * self.model.cfg.n_layers:
                 break
 
         if visualize:

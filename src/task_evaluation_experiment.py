@@ -5,11 +5,10 @@
 
 
 # %%
-
 import torch
 import time
 import plotly.express as px
-from sklearn import metrics
+import matplotlib.pyplot as plt
 
 from task_evaluation import TaskEvaluation
 from data.ioi_dataset import gen_templated_prompts
@@ -18,8 +17,10 @@ from circuit_discovery import CircuitDiscovery, only_feature
 from circuit_lens import CircuitComponent
 from plotly_utils import *
 from data.ioi_dataset import IOI_GROUND_TRUTH_HEADS
-from data.greater_than_dataset import GT_GROUND_TRUTH_HEADS
+# from data.ioi_dataset import GT_GROUND_TRUTH_HEADS
 from memory import get_gpu_memory
+from sklearn import metrics
+from tqdm import trange
 
 from utils import get_attn_head_roc
 
@@ -46,7 +47,7 @@ def component_filter(component: str):
         CircuitComponent.EMBED,
         CircuitComponent.POS_EMBED,
         # CircuitComponent.BIAS_O,
-        # CircuitComponent.Z_SAE_ERROR,
+        CircuitComponent.Z_SAE_ERROR,
         # CircuitComponent.Z_SAE_BIAS,
         # CircuitComponent.TRANSCODER_ERROR,
         # CircuitComponent.TRANSCODER_BIAS,
@@ -95,6 +96,57 @@ task_eval = TaskEvaluation(prompts=dataset_prompts, circuit_discovery_strategy=s
 
 
 # a = task_eval.get_attn_head_freqs_over_dataset(N=N, return_freqs=True)
+
+# %%
+ground = task_eval.get_faithfulness_curve_over_data(N=20, attn_head_freq_n=10, faithfulness_intervals=30, rand=False, ioi_ground=True)
+base = task_eval.get_faithfulness_curve_over_data(N=20, attn_head_freq_n=10, faithfulness_intervals=30, rand=False, ioi_ground=False)
+
+radd = []
+for _ in trange(20):
+    radd.append(task_eval.get_faithfulness_curve_over_data(N=20, attn_head_freq_n=10, faithfulness_intervals=30, rand=True, ioi_ground=False, visualize=False))
+
+
+# %%
+big_rad = {}
+for rad in radd:
+    for k, v in rad.items():
+        if k not in big_rad:
+            big_rad[k] = 0
+        big_rad[k] += v
+
+for k in big_rad:
+    big_rad[k] /= 20
+
+rad = big_rad
+
+# %%
+plt.plot([float(k) for k in ground.keys()], ground.values(), label="Ground Truth")
+plt.plot([float(k) for k in rad.keys()], base.values(), label="Circuit Discovery")
+plt.plot([float(k) for k in base.keys()], rad.values(), label="Random")
+plt.legend()
+plt.grid(True)
+plt.grid(color='gray', linestyle='--', linewidth=0.2)
+plt.title("IOI Faithfulness (Mean Ablation)")
+ax = plt.gca()
+ax.spines['top'].set_visible(False)
+ax.spines['right'].set_visible(False)
+plt.margins(0)
+plt.ylabel("Normalized KL")
+plt.xlabel("# Heads")
+# ax.spines['left'].set_visible(False)
+# ax.spines['bottom'].set_visible(False)
+plt.show()
+
+
+# %%
+line(torch.tensor([[1, 2, 3], [4, 5, 6]]))
+
+# %%
+IOI_GROUND_TRUTH_HEADS.sum()
+
+
+
+
 
 # %%
 cd = task_eval.get_circuit_discovery_for_prompt(20)
@@ -240,7 +292,7 @@ attn_freqs.flatten().softmax(dim=-1).numpy()
 
 
 # %%
-task_eval.get_faithfulness_curve_over_data(eval_n=10, attn_head_freq_n=10)
+task_eval.get_faithfulness_curve_over_data(N=10, attn_head_freq_n=10)
 
 
 # %%
