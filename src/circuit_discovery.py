@@ -148,34 +148,80 @@ class TransformerAnalysisLayer(AnalysisObject):
         ]
 
 
+# class ComponentEdgeTracker:
+#     def __init__(self, transformer_model: "TransformerAnalysisModel"):
+#         self._reciever_to_contributors: Dict[Tuple, Set[Tuple]] = {}
+#         self._contributor_to_recievers: Dict[Tuple, Set[Tuple]] = {}
+
+#         self.transformer_model = transformer_model
+
+#     def add_edge(self, reciever: Tuple, contributor: Tuple):
+#         if reciever not in self._reciever_to_contributors:
+#             self._reciever_to_contributors[reciever] = set()
+#         if contributor not in self._contributor_to_recievers:
+#             self._contributor_to_recievers[contributor] = set()
+
+#         self._reciever_to_contributors[reciever].add(contributor)
+#         self._contributor_to_recievers[contributor].add(reciever)
+
+#     def remove_edge(self, reciever: Tuple, contributor: Tuple):
+#         if reciever in self._reciever_to_contributors:
+#             self._reciever_to_contributors[reciever].discard(contributor)
+#         if contributor in self._contributor_to_recievers:
+#             self._contributor_to_recievers[contributor].discard(reciever)
+
+#     def get_contributors(self, reciever: Tuple) -> List[Tuple]:
+#         return list(self._reciever_to_contributors.get(reciever, set()))
+
+#     def clear(self):
+#         self._reciever_to_contributors = {}
+#         self._contributor_to_recievers = {}
+
 class ComponentEdgeTracker:
     def __init__(self, transformer_model: "TransformerAnalysisModel"):
-        self._reciever_to_contributors: Dict[Tuple, Set[Tuple]] = {}
-        self._contributor_to_recievers: Dict[Tuple, Set[Tuple]] = {}
-
+        self._reciever_to_contributors: Dict[Tuple, Dict[Tuple, float]] = {}
+        self._contributor_to_recievers: Dict[Tuple, Dict[Tuple, float]] = {}
         self.transformer_model = transformer_model
 
-    def add_edge(self, reciever: Tuple, contributor: Tuple):
+    def add_edge(self, reciever: Tuple, contributor: Tuple, weight: float = None):
         if reciever not in self._reciever_to_contributors:
-            self._reciever_to_contributors[reciever] = set()
+            self._reciever_to_contributors[reciever] = {}
         if contributor not in self._contributor_to_recievers:
-            self._contributor_to_recievers[contributor] = set()
+            self._contributor_to_recievers[contributor] = {}
 
-        self._reciever_to_contributors[reciever].add(contributor)
-        self._contributor_to_recievers[contributor].add(reciever)
+        self._reciever_to_contributors[reciever][contributor] = weight
+        self._contributor_to_recievers[contributor][reciever] = weight
 
     def remove_edge(self, reciever: Tuple, contributor: Tuple):
         if reciever in self._reciever_to_contributors:
-            self._reciever_to_contributors[reciever].discard(contributor)
+            self._reciever_to_contributors[reciever].pop(contributor, None)
         if contributor in self._contributor_to_recievers:
-            self._contributor_to_recievers[contributor].discard(reciever)
+            self._contributor_to_recievers[contributor].pop(reciever, None)
 
     def get_contributors(self, reciever: Tuple) -> List[Tuple]:
-        return list(self._reciever_to_contributors.get(reciever, set()))
+        return list(self._reciever_to_contributors.get(reciever, {}).keys())
+
+    def get_contributors_with_weights(self, reciever: Tuple) -> List[Tuple[Tuple, float]]:
+        return list(self._reciever_to_contributors.get(reciever, {}).items())
+
+    def get_total_contributions(self, component_type, layer, head):
+        incoming_contributions = 0
+        outgoing_contributions = 0
+        
+        # for reciever, contributors in self._reciever_to_contributors.items():
+        #     if reciever[:3] == (component_type, layer, head):
+        #         incoming_contributions += sum(contributors.values())
+
+        for contributor, recievers in self._contributor_to_recievers.items():
+            if contributor[:3] == (component_type, layer, head):
+                outgoing_contributions += sum(recievers.values())
+        
+        return incoming_contributions + outgoing_contributions
 
     def clear(self):
         self._reciever_to_contributors = {}
         self._contributor_to_recievers = {}
+
 
 
 class TransformerAnalysisModel(AnalysisObject):
@@ -196,11 +242,11 @@ class TransformerAnalysisModel(AnalysisObject):
         self.edge_tracker = ComponentEdgeTracker(self)
 
     def add_contributor_edge(
-        self, reciever_id: Tuple, contributor_lens: ComponentLens
+        self, reciever_id: Tuple, contributor_lens: ComponentLens, weight: float = None
     ) -> "CircuitDiscoveryNode":
         contributor_node = self.get_discovery_node_at_locator(contributor_lens)
 
-        self.edge_tracker.add_edge(reciever_id, contributor_node.tuple_id)
+        self.edge_tracker.add_edge(reciever_id, contributor_node.tuple_id, weight)
 
         return contributor_node
 
@@ -462,10 +508,10 @@ class CircuitDiscoveryRegularNode(CircuitDiscoveryNode):
         return sorted(self.contributors_in_graph, key=lambda x: -id_value[x.tuple_id])
 
     def add_contributor_edge(
-        self, component_lens: ComponentLens
+        self, component_lens: ComponentLens, weight: float
     ) -> "CircuitDiscoveryNode":
         return self.transformer_model.add_contributor_edge(
-            self.tuple_id, component_lens
+            self.tuple_id, component_lens, weight
         )
 
     def get_top_unused_contributors(self) -> List[ComponentLensWithValue]:
@@ -589,12 +635,12 @@ class CircuitDiscoveryHeadNode(CircuitDiscoveryNode):
         return tuple(list_id)
 
     def add_contributor_edge(
-        self, head_type: str, component_lens: ComponentLens
+        self, head_type: str, component_lens: ComponentLens, weight: float
     ) -> "CircuitDiscoveryNode":
         self._validate_head_type(head_type)
 
         return self.transformer_model.add_contributor_edge(
-            self.tuple_id_for_head_type(head_type), component_lens
+            self.tuple_id_for_head_type(head_type), component_lens, weight
         )
 
     @classmethod
@@ -832,11 +878,12 @@ class CircuitDiscovery:
 
         for contrib in top_contribs:
             reciever = contrib[2]
+            contribution_value = contrib[0]
 
             if isinstance(reciever, CircuitDiscoveryRegularNode):
-                node = reciever.add_contributor_edge(contrib[1])
+                node = reciever.add_contributor_edge(contrib[1], contribution_value)
             elif isinstance(reciever, CircuitDiscoveryHeadNode):
-                node = reciever.add_contributor_edge(contrib[3], contrib[1])
+                node = reciever.add_contributor_edge(contrib[3], contrib[1], contribution_value)
 
             if not node.explored:
                 self.add_greedy_pass(root=node, minimal=True)
@@ -869,7 +916,7 @@ class CircuitDiscovery:
                 total_contrib = 0
 
                 for child in top_contribs[:contributors_per_node]:
-                    child_discovery_node = node.add_contributor_edge(child[0])
+                    child_discovery_node = node.add_contributor_edge(child[0], child[1])
 
                     total_contrib += child[1]
 
@@ -878,7 +925,6 @@ class CircuitDiscovery:
 
                     queue.append(child_discovery_node)
 
-                # print(node.tuple_id, f"Contrib: {total_contrib*100:.3g}%")
             elif isinstance(node, CircuitDiscoveryHeadNode):
                 for head_type in ["q", "k", "v"]:
                     top_contribs = node.get_top_unused_contributors(head_type)
@@ -889,7 +935,7 @@ class CircuitDiscovery:
 
                     for child in top_contribs[:contributors_per_node]:
                         child_discovery_node = node.add_contributor_edge(
-                            head_type, child[0]
+                            head_type, child[0], child[1]
                         )
 
                         total_contrib += child[1]
@@ -919,6 +965,23 @@ class CircuitDiscovery:
             imshow(attn_heads, labels={"x": "Head", "y": "Layer"})
 
         return attn_heads
+    
+    def mlps_tensor(self, visualize=False):
+        mlps = torch.zeros(12)
+
+        def track_included_heads_and_mlps(node: CircuitDiscoveryNode, mlps):
+            if isinstance(node, CircuitDiscoveryRegularNode):
+                if node.component == CircuitComponent.MLP_FEATURE:
+                    mlps[node.layer] = 1
+
+        fn = partial(track_included_heads_and_mlps, mlps=mlps)
+
+        self.traverse_graph(fn)
+
+        if visualize:
+            imshow(mlps, labels={"x": "Layer"})
+
+        return mlps
 
     def get_heads_and_mlps_in_graph(self) -> Tuple[List[List[int]], List[int]]:
         attn_heads_set = set()
@@ -1277,6 +1340,25 @@ class CircuitDiscovery:
         self.traverse_graph(fn)
 
         return features_at_heads
+    
+    def get_features_at_mlps_in_graph(self):
+        features_at_mlps = [set() for _ in range(self.model.cfg.n_layers)]
+
+        def visit_fn(node: CircuitDiscoveryNode, features_at_mlps: List[Set]):
+            if not isinstance(node, CircuitDiscoveryRegularNode):
+                return
+
+            if node.component == CircuitComponent.MLP_FEATURE:
+                layer = node.layer
+                feature = node.component_lens.run_data["feature"]
+
+                features_at_mlps[layer].add(feature)
+
+        fn = partial(visit_fn, features_at_mlps=features_at_mlps)
+
+        self.traverse_graph(fn)
+
+        return features_at_mlps
 
     def component_lens_at_loc(self, loc: List):
         node: CircuitDiscoveryNode = self.root_node
@@ -1539,3 +1621,69 @@ class CircuitDiscovery:
         self.traverse_graph(fn, print_node_trace=True)
 
         return G
+    
+
+    def add_directed_edges_with_weights(self, root_node, contributors_per_node=1):
+        queue = [root_node]
+        visited_ids = set()
+
+        while queue:
+            node = queue.pop(0)
+            if node.tuple_id in visited_ids:
+                continue
+
+            visited_ids.add(node.tuple_id)
+
+            if isinstance(node, CircuitDiscoveryRegularNode):
+                top_contribs = node.get_top_unused_contributors()
+                for contributor, value in top_contribs[:contributors_per_node]:
+                    print(f"Node: {node.tuple_id}, Contributor: {contributor}, Value: {value}")
+                    contributor_node = node.add_contributor_edge(contributor)
+                    self.transformer_model.edge_tracker.add_edge(node.tuple_id, contributor_node.tuple_id, weight=value)
+                    queue.append(contributor_node)
+
+            elif isinstance(node, CircuitDiscoveryHeadNode):
+                for head_type in ["q", "k", "v"]:
+                    top_contribs = node.get_top_unused_contributors(head_type)
+                    for contributor, value in top_contribs[:contributors_per_node]:
+                        print(f"Node: {node.tuple_id}, Head Type: {head_type}, Contributor: {contributor}, Value: {value}")
+                        contributor_node = node.add_contributor_edge(head_type, contributor)
+                        self.transformer_model.edge_tracker.add_edge(node.tuple_id, contributor_node.tuple_id, weight=value)
+                        queue.append(contributor_node)
+
+
+    def recursive_explore_all_nodes(self, root_node, contributors_per_node=1):
+        """
+        Recursively explore all nodes and add edges for each node.
+        """
+        visited_ids = set()
+
+        def explore_node(node):
+            if node.tuple_id in visited_ids:
+                return
+
+            visited_ids.add(node.tuple_id)
+            self.add_directed_edges_with_weights(node, contributors_per_node)
+
+            if isinstance(node, CircuitDiscoveryRegularNode):
+                for contributor_node in node.contributors_in_graph:
+                    explore_node(contributor_node)
+
+            elif isinstance(node, CircuitDiscoveryHeadNode):
+                for head_type in ["q", "k", "v"]:
+                    for contributor_node in node.contributors_in_graph(head_type):
+                        explore_node(contributor_node)
+
+        explore_node(root_node)
+
+    def build_directed_graph(self, contributors_per_node=1):
+        """
+        Build the entire directed graph by exploring all nodes from the root.
+        """
+        self.reset_graph()
+        self.recursive_explore_all_nodes(self.root_node, contributors_per_node)
+
+
+
+
+

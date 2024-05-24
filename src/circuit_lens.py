@@ -904,65 +904,6 @@ class CircuitLens:
             feature_act, layer, seq_index, feature, visualize=visualize, k=k
         )
 
-        # # feature_act /= feature_act.sum()
-        # feature_act = self.normalize_activations(feature_act)
-
-        # values, indices = feature_act.topk(k=k)
-
-        # lens_runs = []
-        # vis_list = []
-
-        # for index, value in zip(indices.tolist(), values.tolist()):
-        #     head = index // self.n_tokens
-        #     source = index % self.n_tokens
-
-        #     lens_runs.append(
-        #         (
-        #             ComponentLens(
-        #                 circuit_lens=self,
-        #                 component=CircuitComponent.ATTN_HEAD,
-        #                 run_data={
-        #                     "layer": layer,
-        #                     "head": head,
-        #                     "source_index": source,
-        #                     "feature": feature,
-        #                     "destination_index": seq_index,
-        #                 },
-        #             ),
-        #             value,
-        #         )
-        #     )
-
-        #     if visualize:
-        #         vis_list.append((head, source, seq_index, value))
-
-        # if visualize:
-        #     vis = einops.rearrange(
-        #         feature_act, "(n_head seq) -> n_head seq", n_head=self.model.cfg.n_heads
-        #     )
-
-        #     imshow(
-        #         vis,
-        #         x=[
-        #             f"{token}/{i}"
-        #             for (i, token) in enumerate(self.model.to_str_tokens(self.prompt))
-        #         ],
-        #         title=f"Layer {layer} Head/Seq Feature {feature} at '{self.get_str_token_at_seq(seq_index)}'::{seq_index}",
-        #         labels={"x": "Token", "y": "Head"},
-        #     )
-
-        #     pprint(
-        #         [
-        #             f"Head {head} "
-        #             + f"| Source: {self.model.tokenizer.decode([self.tokens[0, source]])}::{source} "
-        #             + f"| Destination: {self.model.tokenizer.decode([self.tokens[0, dest]])}::{dest} "
-        #             + f"| Contribution: {value * 100:.3g}%"
-        #             for (head, source, dest, value) in vis_list
-        #         ]
-        #     )
-
-        # return lens_runs
-
     def get_head_seq_lens_for_z_error(
         self, layer: int, seq_index: int, visualize=True, k=10
     ):

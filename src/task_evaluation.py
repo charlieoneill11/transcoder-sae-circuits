@@ -3,7 +3,7 @@ import plotly.express as px
 import random
 import einops
 
-from circuit_discovery import CircuitDiscovery, all_allowed
+from circuit_discovery import CircuitDiscovery, all_allowed, CircuitComponent
 from circuit_lens import get_model_encoders
 from typing import List, Callable, Set
 from transformer_lens import ActivationCache
@@ -258,28 +258,159 @@ class TaskEvaluation:
 
         if return_freqs:
             return head_freqs
+        
+    def get_mlp_freqs_over_dataset(
+            self,
+            N=None,
+            visualize=True,
+            return_freqs=True,
+            subtract_counter_factuals=False,
+            additional_title="",
+            **kwargs,
+    ):
+        if N is None:
+            N = len(self.prompts)
 
-    def get_features_at_heads_over_dataset(self, N=None):
+        mlp_freqs = torch.zeros(12)
+
+        for i in trange(N):
+            cd = self.get_circuit_discovery_for_prompt(i, **kwargs)
+            mlp_freqs = mlp_freqs + cd.mlps_tensor()
+
+            if subtract_counter_factuals:
+                counter = self.get_circuit_discovery_for_prompt(
+                    i, use_counter_factual=True, **kwargs
+                )
+
+                mlp_freqs = mlp_freqs - counter.mlps_tensor()
+
+        mlp_freqs = mlp_freqs.float() / N
+
+        if visualize:
+            imshow(
+                mlp_freqs.unsqueeze(0),
+                title="MLP Freqs for Strategy + Task " + additional_title,
+                labels={"x": "MLP"},
+            )
+
+        if return_freqs:
+            return mlp_freqs
+        
+    def get_weighted_attn_head_freqs_over_dataset(self, N=None, visualize=True, return_freqs=True, **kwargs):
+        if N is None:
+            N = len(self.prompts)
+
+        head_freqs = torch.zeros(12, 12)
+        total_contributions = torch.zeros(12, 12)
+
+        for i in trange(N):
+            cd = self.get_circuit_discovery_for_prompt(i, **kwargs)
+            head_freqs = head_freqs + cd.attn_heads_tensor()
+
+            for layer in range(12):
+                for head in range(12):
+                    contributions = cd.transformer_model.edge_tracker.get_total_contributions(CircuitComponent.ATTN_HEAD, layer, head)
+                    total_contributions[layer, head] += contributions
+
+        weighted_head_freqs = head_freqs * total_contributions
+
+        if visualize:
+            imshow(weighted_head_freqs, title="Weighted Attn Head Freqs for Strategy + Task", labels={"x": "Head", "y": "Layer"})
+
+        if return_freqs:
+            return weighted_head_freqs
+
+
+    # def get_features_at_heads_over_dataset(self, N=None):
+    #     if N is None:
+    #         N = len(self.prompts)
+
+    #     n_layers = self.model.cfg.n_layers
+    #     n_heads = self.model.cfg.n_heads
+
+    #     features_for_heads = [[set() for _ in range(n_heads)] for _ in range(n_layers)]
+
+    #     for i in trange(N):
+    #         cd = self.get_circuit_discovery_for_prompt(i)
+
+    #         prompt_features_for_heads = cd.get_features_at_heads_in_graph()
+
+    #         for layer in range(n_layers):
+    #             for head in range(n_heads):
+    #                 features_for_heads[layer][head].update(
+    #                     prompt_features_for_heads[layer][head]
+    #                 )
+
+    #     return features_for_heads
+    
+    # def get_features_at_mlps_over_dataset(self, N=None):
+
+    #     if N is None:
+    #         N = len(self.prompts)
+
+    #     n_layers = self.model.cfg.n_layers
+
+    #     features_for_mlps = [set() for _ in range(n_layers)]
+
+    #     for i in trange(N):
+    #         cd = self.get_circuit_discovery_for_prompt(i)
+
+    #         prompt_features_for_mlps = cd.get_features_at_mlps_in_graph()
+
+    #         for layer in range(n_layers):
+    #             features_for_mlps[layer].update(
+    #                 prompt_features_for_mlps[layer]
+    #             )
+
+    #     return features_for_mlps
+
+    def get_features_at_heads_over_dataset(self, N=None, use_set=True):
         if N is None:
             N = len(self.prompts)
 
         n_layers = self.model.cfg.n_layers
         n_heads = self.model.cfg.n_heads
 
-        features_for_heads = [[set() for _ in range(n_heads)] for _ in range(n_layers)]
+        if use_set:
+            features_for_heads = [[set() for _ in range(n_heads)] for _ in range(n_layers)]
+        else:
+            features_for_heads = [[[] for _ in range(n_heads)] for _ in range(n_layers)]
 
         for i in trange(N):
             cd = self.get_circuit_discovery_for_prompt(i)
-
             prompt_features_for_heads = cd.get_features_at_heads_in_graph()
 
             for layer in range(n_layers):
                 for head in range(n_heads):
-                    features_for_heads[layer][head].update(
-                        prompt_features_for_heads[layer][head]
-                    )
+                    if use_set:
+                        features_for_heads[layer][head].update(prompt_features_for_heads[layer][head])
+                    else:
+                        features_for_heads[layer][head].extend(prompt_features_for_heads[layer][head])
 
         return features_for_heads
+
+    def get_features_at_mlps_over_dataset(self, N=None, use_set=True):
+        if N is None:
+            N = len(self.prompts)
+
+        n_layers = self.model.cfg.n_layers
+
+        if use_set:
+            features_for_mlps = [set() for _ in range(n_layers)]
+        else:
+            features_for_mlps = [[] for _ in range(n_layers)]
+
+        for i in trange(N):
+            cd = self.get_circuit_discovery_for_prompt(i)
+            prompt_features_for_mlps = cd.get_features_at_mlps_in_graph()
+
+            for layer in range(n_layers):
+                if use_set:
+                    features_for_mlps[layer].update(prompt_features_for_mlps[layer])
+                else:
+                    features_for_mlps[layer].extend(prompt_features_for_mlps[layer])
+
+        return features_for_mlps
 
     def get_feature_count_for_heads_over_dataset(self, N=None):
         if N is None:
