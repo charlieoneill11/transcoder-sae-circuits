@@ -24,9 +24,12 @@ def get_top_token_rankings(tokens, logits, seq_index, k=10):
     return list(zip(indices, softmax[indices].tolist(), (-log_probs[indices]).tolist()))
 
 
-def visualize_top_tokens(model, tokens, logits, seq_index, token=None, k=5):
+def visualize_top_tokens_for_seq(model, tokens, logits, seq_index, token=None, k=5):
     tokens = tokens.squeeze()
     logits = logits.squeeze()
+
+    if isinstance(token, str):
+        token = model.to_single_token(token)
 
     if seq_index < 0:
         seq_index += tokens.size(0)
@@ -84,4 +87,38 @@ def visualize_top_tokens(model, tokens, logits, seq_index, token=None, k=5):
         )
 
     rprint(selected_token_table)
+    rprint(top_table)
+
+
+def visualize_top_tokens(model, logits, k=5):
+    logits = logits.squeeze()
+
+    seq_index = -1
+
+    log_probs = F.log_softmax(logits, dim=-1)[seq_index]
+    softmax = F.softmax(logits, dim=-1)[seq_index]
+
+    indices = softmax.topk(k).indices.tolist()
+
+    top_table = Table(
+        show_header=True,
+        header_style="bold yellow",
+        show_lines=True,
+        title="Top Tokens",
+    )
+    top_table.add_column("Rank")
+    top_table.add_column("Token")
+    top_table.add_column("Prob")
+    top_table.add_column("-Log Prob")
+    top_table.add_column("Token Index")
+
+    for i, index in enumerate(indices):
+        top_table.add_row(
+            str(i),
+            f"'{model.tokenizer.decode(index)}'",
+            f"{softmax[index].item() * 100:.3g}%",
+            f"{-log_probs[index].item():.3g}",
+            str(index),
+        )
+
     rprint(top_table)

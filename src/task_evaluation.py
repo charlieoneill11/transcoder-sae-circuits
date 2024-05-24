@@ -18,9 +18,20 @@ from data.ioi_dataset import IOI_GROUND_TRUTH_HEADS
 Z_FILTER = lambda x: x.endswith("z")
 
 
-class FeatureCountForHeads:
+class UniqueFeaturesForHeads:
     def __init__(self, features_for_heads_over_dataset: List[List[List[Set]]]):
-        self.featuers_for_heads_over_dataset = features_for_heads_over_dataset
+        self.features_for_heads_over_dataset = features_for_heads_over_dataset
+
+    def get_unique_features_for_head(self, layer: int, head: int, N=None) -> Set[int]:
+        if N is None:
+            N = len(self.features_for_heads_over_dataset)
+
+        unique_features = set()
+
+        for features in self.features_for_heads_over_dataset[:N]:
+            unique_features.update(features[layer][head])
+
+        return unique_features
 
     def get_feature_counts_for_head_over_range(
         self, layer, head, N, num_samples=10, visualize=True
@@ -31,7 +42,7 @@ class FeatureCountForHeads:
             total = 0
 
             for _ in range(num_samples):
-                sample_data = random.sample(self.featuers_for_heads_over_dataset, k=i)
+                sample_data = random.sample(self.features_for_heads_over_dataset, k=i)
 
                 sample_set = set()
 
@@ -61,7 +72,7 @@ class FeatureCountForHeads:
             total = 0
 
             for _ in range(num_samples):
-                sample_data = random.sample(self.featuers_for_heads_over_dataset, k=i)
+                sample_data = random.sample(self.features_for_heads_over_dataset, k=i)
 
                 sample_set = set()
 
@@ -86,7 +97,7 @@ class FeatureCountForHeads:
     def get_feature_set_for_head(self, layer, head):
         feature_set = set()
 
-        for data_point in self.featuers_for_heads_over_dataset:
+        for data_point in self.features_for_heads_over_dataset:
             feature_set.update(data_point[layer][head])
 
         return feature_set
@@ -103,6 +114,7 @@ class TaskEvaluation:
         circuit_discovery_strategy: Callable[[CircuitDiscovery], None],
         allowed_components_filter: Callable[[str], bool] = all_allowed,
         eval_index: int = -1,
+        no_mean_cache=False,
     ):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.model = get_model_encoders(self.device)[0]
@@ -112,6 +124,9 @@ class TaskEvaluation:
         self.tokens = self.model.to_tokens(self.str_prompts)
         self.eval_index = eval_index
         self.allowed_components_filter = allowed_components_filter
+
+        if no_mean_cache:
+            return
 
         logits, cache = self.model.run_with_cache(self.tokens, return_type="logits")
 
@@ -258,15 +273,15 @@ class TaskEvaluation:
 
         if return_freqs:
             return head_freqs
-        
+
     def get_mlp_freqs_over_dataset(
-            self,
-            N=None,
-            visualize=True,
-            return_freqs=True,
-            subtract_counter_factuals=False,
-            additional_title="",
-            **kwargs,
+        self,
+        N=None,
+        visualize=True,
+        return_freqs=True,
+        subtract_counter_factuals=False,
+        additional_title="",
+        **kwargs,
     ):
         if N is None:
             N = len(self.prompts)
@@ -295,8 +310,10 @@ class TaskEvaluation:
 
         if return_freqs:
             return mlp_freqs
-        
-    def get_weighted_attn_head_freqs_over_dataset(self, N=None, visualize=True, return_freqs=True, **kwargs):
+
+    def get_weighted_attn_head_freqs_over_dataset(
+        self, N=None, visualize=True, return_freqs=True, **kwargs
+    ):
         if N is None:
             N = len(self.prompts)
 
@@ -309,17 +326,24 @@ class TaskEvaluation:
 
             for layer in range(12):
                 for head in range(12):
-                    contributions = cd.transformer_model.edge_tracker.get_total_contributions(CircuitComponent.ATTN_HEAD, layer, head)
+                    contributions = (
+                        cd.transformer_model.edge_tracker.get_total_contributions(
+                            CircuitComponent.ATTN_HEAD, layer, head
+                        )
+                    )
                     total_contributions[layer, head] += contributions
 
         weighted_head_freqs = head_freqs * total_contributions
 
         if visualize:
-            imshow(weighted_head_freqs, title="Weighted Attn Head Freqs for Strategy + Task", labels={"x": "Head", "y": "Layer"})
+            imshow(
+                weighted_head_freqs,
+                title="Weighted Attn Head Freqs for Strategy + Task",
+                labels={"x": "Head", "y": "Layer"},
+            )
 
         if return_freqs:
             return weighted_head_freqs
-
 
     # def get_features_at_heads_over_dataset(self, N=None):
     #     if N is None:
@@ -342,7 +366,7 @@ class TaskEvaluation:
     #                 )
 
     #     return features_for_heads
-    
+
     # def get_features_at_mlps_over_dataset(self, N=None):
 
     #     if N is None:
@@ -372,7 +396,9 @@ class TaskEvaluation:
         n_heads = self.model.cfg.n_heads
 
         if use_set:
-            features_for_heads = [[set() for _ in range(n_heads)] for _ in range(n_layers)]
+            features_for_heads = [
+                [set() for _ in range(n_heads)] for _ in range(n_layers)
+            ]
         else:
             features_for_heads = [[[] for _ in range(n_heads)] for _ in range(n_layers)]
 
@@ -383,9 +409,13 @@ class TaskEvaluation:
             for layer in range(n_layers):
                 for head in range(n_heads):
                     if use_set:
-                        features_for_heads[layer][head].update(prompt_features_for_heads[layer][head])
+                        features_for_heads[layer][head].update(
+                            prompt_features_for_heads[layer][head]
+                        )
                     else:
-                        features_for_heads[layer][head].extend(prompt_features_for_heads[layer][head])
+                        features_for_heads[layer][head].extend(
+                            prompt_features_for_heads[layer][head]
+                        )
 
         return features_for_heads
 
@@ -412,12 +442,9 @@ class TaskEvaluation:
 
         return features_for_mlps
 
-    def get_feature_count_for_heads_over_dataset(self, N=None):
+    def get_unique_features_for_heads_over_dataset(self, N=None):
         if N is None:
             N = len(self.prompts)
-
-        n_layers = self.model.cfg.n_layers
-        n_heads = self.model.cfg.n_heads
 
         data = []
 
@@ -426,7 +453,7 @@ class TaskEvaluation:
 
             data.append(cd.get_features_at_heads_in_graph())
 
-        return FeatureCountForHeads(data)
+        return UniqueFeaturesForHeads(data)
 
     def get_faithfulness_curve_over_data(
         self,
