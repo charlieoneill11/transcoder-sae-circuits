@@ -248,7 +248,9 @@ def get_feature_scores(
 
         scores.append(
             to_numpy(
-                cur_scores.reshape(-1, len(feature_indices), tokens_arr.shape[1])
+                einops.rearrange(
+                    cur_scores, "(b pos) n -> b n pos", pos=tokens_arr.shape[1]
+                )
             ).astype(np.float16)
         )
 
