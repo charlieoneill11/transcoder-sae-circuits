@@ -13,7 +13,7 @@ from graphviz import Digraph
 from functools import partial
 from transformer_lens.hook_points import HookPoint
 from transformer_lens import ActivationCache
-from ranking_utils import visualize_top_tokens
+from ranking_utils import visualize_top_tokens_for_seq
 from jaxtyping import Float
 from IPython.display import HTML
 from plotly_utils import *
@@ -1235,12 +1235,16 @@ class CircuitDiscovery:
 
         print("Base Performance:")
 
-        visualize_top_tokens(self.model, self.tokens, base_logits, self.seq_index, k=k)
+        visualize_top_tokens_for_seq(
+            self.model, self.tokens, base_logits, self.seq_index, k=k
+        )
 
         print()
         print("Graph Performance:")
 
-        visualize_top_tokens(self.model, self.tokens, graph_logits, self.seq_index, k=k)
+        visualize_top_tokens_for_seq(
+            self.model, self.tokens, graph_logits, self.seq_index, k=k
+        )
 
     def visualize_graph_performance_against_base_ablation(self, **kwargs):
         base_logits = self.model(self.tokens, return_type="logits")
@@ -1249,12 +1253,16 @@ class CircuitDiscovery:
 
         print("Base Performance:")
 
-        visualize_top_tokens(self.model, self.tokens, base_logits, self.seq_index)
+        visualize_top_tokens_for_seq(
+            self.model, self.tokens, base_logits, self.seq_index
+        )
 
         print()
         print("Graph Performance:")
 
-        visualize_top_tokens(self.model, self.tokens, graph_logits, self.seq_index)
+        visualize_top_tokens_for_seq(
+            self.model, self.tokens, graph_logits, self.seq_index
+        )
 
     def get_features_at_heads_in_graph(self):
         features_at_heads = [
@@ -1353,6 +1361,14 @@ class CircuitDiscovery:
         layers = [dict() for _ in range(self.model.cfg.n_layers)]
         embed = dict()
 
+        def node_id(tuple_id):
+            if tuple_id != CircuitComponent.ATTN_HEAD:
+                return str(tuple_id)
+
+            comp, layer, head, source, dest, *_ = tuple_id
+
+            return str((comp, layer, head, source, dest))
+
         def add_node_to_record(node: CircuitDiscoveryNode, layers, embed):
             component = node.tuple_id[0]
 
@@ -1398,11 +1414,11 @@ class CircuitDiscovery:
                     for pos_embed in pos_embeds:
                         seq_index = pos_embed[2]
 
-                        subgraph.node(str(pos_embed), label=f"POS: {seq_index}")
+                        subgraph.node(node_id(pos_embed), label=f"POS: {seq_index}")
 
                         G.edge(
                             embed_id(seq_index),
-                            str(pos_embed),
+                            node_id(pos_embed),
                             style="invis",
                             # , minlen=".1"
                         )
@@ -1415,7 +1431,8 @@ class CircuitDiscovery:
                     seq_index = unembed[1]
 
                     subgraph.node(
-                        str(unembed), label=f"UE: '{self.str_tokens[seq_index + 1]}'"
+                        node_id(unembed),
+                        label=f"UE: '{self.str_tokens[seq_index + 1]}'",
                     )
 
         unembeds = list(embed.get(CircuitComponent.UNEMBED, set()))
@@ -1427,7 +1444,7 @@ class CircuitDiscovery:
                     _, seq_index, token_i = unembed
 
                     subgraph.node(
-                        str(unembed),
+                        node_id(unembed),
                         label=f"UE: '{self.model.to_single_str_token(token_i)}'",
                     )
 
@@ -1462,7 +1479,7 @@ class CircuitDiscovery:
                         _, _, head, source, dest, *_ = head_id
 
                         subgraph.node(
-                            str(head_id),
+                            node_id(head_id),
                             label=f"Attn L{layer}H{head}\n'{self.str_tokens[source]}'/{source} → '{self.str_tokens[dest]}'/{dest}",
                         )
 
@@ -1495,7 +1512,7 @@ class CircuitDiscovery:
                             label = f"{component_to_name(component)} L{layer}\n'{self.str_tokens[seq_index]}'/{seq_index}"
 
                         subgraph.node(
-                            str(comp_id),
+                            node_id(comp_id),
                             label=label,
                         )
 
@@ -1519,7 +1536,9 @@ class CircuitDiscovery:
                             continue
 
                         G.edge(
-                            str(contributor.tuple_id), str(node.tuple_id), color=color
+                            node_id(contributor.tuple_id),
+                            node_id(node.tuple_id),
+                            color=color,
                         )
 
             if isinstance(node, CircuitDiscoveryRegularNode):
@@ -1532,10 +1551,10 @@ class CircuitDiscovery:
                 for contributor in node.contributors_in_graph:
                     if contributor.layer < begin_layer:
                         continue
-                    G.edge(str(contributor.tuple_id), str(node.tuple_id))
+                    G.edge(node_id(contributor.tuple_id), node_id(node.tuple_id))
 
         fn = partial(add_edges, G=G)
 
-        self.traverse_graph(fn, print_node_trace=True)
+        self.traverse_graph(fn)
 
         return G
