@@ -711,56 +711,54 @@ class CircuitDiscovery:
         co_occurrence_dict = {}
         components = []
 
-        # Generate all components (attention heads and mlps)
         for layer in range(self.model.cfg.n_layers):
             for head in range(self.model.cfg.n_heads):
                 components.append((CircuitComponent.ATTN_HEAD, layer, head))
             components.append((CircuitComponent.MLP_FEATURE, layer))
         
-        # Initialize the co-occurrence dictionary
         for component in components:
-            co_occurrence_dict[component] = {other_component: set() for other_component in components if other_component != component}
+            co_occurrence_dict[component] = {other_component: [] for other_component in components if other_component != component}
         
         return co_occurrence_dict
 
     
     def update_co_occurrence(self, component1, component2, feature_tuple):
         if component1 != component2:
-            self.co_occurrence_dict[component1][component2].add(feature_tuple)
-            self.co_occurrence_dict[component2][component1].add(feature_tuple)
+            self.co_occurrence_dict[component1][component2].append(feature_tuple)
+            self.co_occurrence_dict[component2][component1].append(feature_tuple)
 
 
 
-    def collect_co_occurrences(self):
-        all_nodes = self.all_nodes_in_graph()
-        features_at_heads = self.get_features_at_heads_in_graph()
-        features_at_mlps = self.get_features_at_mlps_in_graph()
+    # def collect_co_occurrences(self):
+    #     all_nodes = self.all_nodes_in_graph()
+    #     features_at_heads = self.get_features_at_heads_in_graph()
+    #     features_at_mlps = self.get_features_at_mlps_in_graph()
 
-        components = []
-        for layer in range(self.model.cfg.n_layers):
-            for head in range(self.model.cfg.n_heads):
-                components.append((CircuitComponent.ATTN_HEAD, layer, head))
-            components.append((CircuitComponent.MLP_FEATURE, layer))
+    #     components = []
+    #     for layer in range(self.model.cfg.n_layers):
+    #         for head in range(self.model.cfg.n_heads):
+    #             components.append((CircuitComponent.ATTN_HEAD, layer, head))
+    #         components.append((CircuitComponent.MLP_FEATURE, layer))
         
-        # Collect features for each component
-        component_features = {}
-        for component in components:
-            if component[0] == CircuitComponent.ATTN_HEAD:
-                layer, head = component[1], component[2]
-                component_features[component] = features_at_heads[layer][head]
-            elif component[0] == CircuitComponent.MLP_FEATURE:
-                layer = component[1]
-                component_features[component] = features_at_mlps[layer]
+    #     # Collect features for each component
+    #     component_features = {}
+    #     for component in components:
+    #         if component[0] == CircuitComponent.ATTN_HEAD:
+    #             layer, head = component[1], component[2]
+    #             component_features[component] = features_at_heads[layer][head]
+    #         elif component[0] == CircuitComponent.MLP_FEATURE:
+    #             layer = component[1]
+    #             component_features[component] = features_at_mlps[layer]
         
-        # Iterate over all pairs of components and update co-occurrence
-        for i, component1 in enumerate(components):
-            for j, component2 in enumerate(components):
-                if i >= j:
-                    continue
+    #     # Iterate over all pairs of components and update co-occurrence
+    #     for i, component1 in enumerate(components):
+    #         for j, component2 in enumerate(components):
+    #             if i >= j:
+    #                 continue
 
-                common_features = component_features[component1].intersection(component_features[component2])
-                for feature in common_features:
-                    self.update_co_occurrence(component1, component2, feature)
+    #             common_features = component_features[component1].intersection(component_features[component2])
+    #             for feature in common_features:
+    #                 self.update_co_occurrence(component1, component2, feature)
 
 
 

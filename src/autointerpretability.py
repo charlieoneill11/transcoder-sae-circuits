@@ -33,7 +33,7 @@ class CircuitPrediction:
         self.mlp_freqs = mlp_freqs
         self.features_for_heads = features_for_heads
         self.features_for_mlps = features_for_mlps
-        self.co_occurrence_dict = co_occurrence_dict
+        self.co_occurrence_dict = self.clean_co_occurrence_dict(co_occurrence_dict)
 
     def display_co_occurrences(self):
         for layer, data in self.co_occurrence_dict.items():
@@ -48,6 +48,26 @@ class CircuitPrediction:
             # Display mlps
             mlp_info = data['mlps']
             print(f"  MLP: Count = {mlp_info['count']}, Features = {mlp_info['features']}")
+
+    def clean_co_occurrence_dict(self, co_occurrence_dict):
+        # Create a new dictionary to hold the cleaned data
+        cleaned_dict = {}
+
+        for component, co_occurrences in co_occurrence_dict.items():
+            # Create a new sub-dictionary for the current component
+            cleaned_sub_dict = {}
+
+            for other_component, feature_tuples in co_occurrences.items():
+                # Filter out tuples containing -1
+                filtered_tuples = [t for t in feature_tuples if -1 not in t]
+
+                if filtered_tuples:  # Only add if there are remaining tuples
+                    cleaned_sub_dict[other_component] = filtered_tuples
+
+            if cleaned_sub_dict:  # Only add if there are remaining entries
+                cleaned_dict[component] = cleaned_sub_dict
+
+        return cleaned_dict
 
     def create_circuit_hypergraph(self):
         circuit_hypergraph = {label: {"freq": 0, "features": []} for label in self.component_labels}
@@ -122,49 +142,6 @@ class CircuitPrediction:
                         title="Unique features", x=labels, y=list(range(12)), color_continuous_scale="blues")
             fig.show()
         return unique_features_array
-    
-    def initialize_co_occurrence_dict(self):
-        co_occurrence_dict = {}
-        for layer in range(self.model.cfg.n_layers):
-            co_occurrence_dict[layer] = {
-                "heads": [{(i, j): {"count": 0, "features": set()} for j in range(self.model.cfg.n_heads)} for i in range(self.model.cfg.n_heads)],
-                "mlps": {"count": 0, "features": set()}
-            }
-        return co_occurrence_dict
-
-    def get_co_occurrence(self, component1, component2):
-        if component1[0] == CircuitComponent.ATTN_HEAD and component2[0] == CircuitComponent.ATTN_HEAD:
-            layer1, head1 = component1[1], component1[2]
-            layer2, head2 = component2[1], component2[2]
-            return self.co_occurrence_dict[layer1]["heads"][head1][(layer2, head2)]
-        elif component1[0] == CircuitComponent.MLP_FEATURE and component2[0] == CircuitComponent.MLP_FEATURE:
-            layer = component1[1]
-            return self.co_occurrence_dict[layer]["mlps"]
-        else:
-            return None
-
-    def get_co_occurrence_features(self, component1, component2):
-        co_occurrence_data = self.get_co_occurrence(component1, component2)
-        if co_occurrence_data:
-            return co_occurrence_data["features"]
-        return set()
-
-    def get_co_occurrence_count(self, component1, component2):
-        co_occurrence_data = self.get_co_occurrence(component1, component2)
-        if co_occurrence_data:
-            return co_occurrence_data["count"]
-        return 0
-
-    def add_co_occurrence(self, component1, component2, feature):
-        if component1[0] == CircuitComponent.ATTN_HEAD and component2[0] == CircuitComponent.ATTN_HEAD:
-            layer1, head1 = component1[1], component1[2]
-            layer2, head2 = component2[1], component2[2]
-            self.co_occurrence_dict[layer1]["heads"][head1][(layer2, head2)]["count"] += 1
-            self.co_occurrence_dict[layer1]["heads"][head1][(layer2, head2)]["features"].add(feature)
-        elif component1[0] == CircuitComponent.MLP_FEATURE and component2[0] == CircuitComponent.MLP_FEATURE:
-            layer = component1[1]
-            self.co_occurrence_dict[layer]["mlps"]["count"] += 1
-            self.co_occurrence_dict[layer]["mlps"]["features"].add(feature)
 
 
 def tokenize_and_concatenate(dataset, tokenizer, streaming=False, max_length=1024, column_name="text", add_bos_token=True):
