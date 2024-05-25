@@ -704,6 +704,66 @@ class CircuitDiscovery:
                 ComponentLens.create_unembed_at_token_lens(self.lens, self.seq_index),
             )
 
+        self.co_occurrence_dict = self.initialize_co_occurrence_dict()
+
+
+    def initialize_co_occurrence_dict(self):
+        co_occurrence_dict = {}
+        components = []
+
+        # Generate all components (attention heads and mlps)
+        for layer in range(self.model.cfg.n_layers):
+            for head in range(self.model.cfg.n_heads):
+                components.append((CircuitComponent.ATTN_HEAD, layer, head))
+            components.append((CircuitComponent.MLP_FEATURE, layer))
+        
+        # Initialize the co-occurrence dictionary
+        for component in components:
+            co_occurrence_dict[component] = {other_component: set() for other_component in components if other_component != component}
+        
+        return co_occurrence_dict
+
+    
+    def update_co_occurrence(self, component1, component2, feature_tuple):
+        if component1 != component2:
+            self.co_occurrence_dict[component1][component2].add(feature_tuple)
+            self.co_occurrence_dict[component2][component1].add(feature_tuple)
+
+
+
+    def collect_co_occurrences(self):
+        all_nodes = self.all_nodes_in_graph()
+        features_at_heads = self.get_features_at_heads_in_graph()
+        features_at_mlps = self.get_features_at_mlps_in_graph()
+
+        components = []
+        for layer in range(self.model.cfg.n_layers):
+            for head in range(self.model.cfg.n_heads):
+                components.append((CircuitComponent.ATTN_HEAD, layer, head))
+            components.append((CircuitComponent.MLP_FEATURE, layer))
+        
+        # Collect features for each component
+        component_features = {}
+        for component in components:
+            if component[0] == CircuitComponent.ATTN_HEAD:
+                layer, head = component[1], component[2]
+                component_features[component] = features_at_heads[layer][head]
+            elif component[0] == CircuitComponent.MLP_FEATURE:
+                layer = component[1]
+                component_features[component] = features_at_mlps[layer]
+        
+        # Iterate over all pairs of components and update co-occurrence
+        for i, component1 in enumerate(components):
+            for j, component2 in enumerate(components):
+                if i >= j:
+                    continue
+
+                common_features = component_features[component1].intersection(component_features[component2])
+                for feature in common_features:
+                    self.update_co_occurrence(component1, component2, feature)
+
+
+
     def set_root(self, tuple_id, no_graph_reset=False):
         if not no_graph_reset:
             self.reset_graph()
@@ -887,6 +947,7 @@ class CircuitDiscovery:
 
             if not node.explored:
                 self.add_greedy_pass(root=node, minimal=True)
+                self.update_co_occurrences_for_node(node)
 
     def add_greedy_pass(self, contributors_per_node=1, root=None, minimal=False):
         """
@@ -924,6 +985,7 @@ class CircuitDiscovery:
                         continue
 
                     queue.append(child_discovery_node)
+                    self.update_co_occurrences_for_node(child_discovery_node)
 
             elif isinstance(node, CircuitDiscoveryHeadNode):
                 for head_type in ["q", "k", "v"]:
@@ -944,11 +1006,51 @@ class CircuitDiscovery:
                             continue
 
                         queue.append(child_discovery_node)
+                        self.update_co_occurrences_for_node(child_discovery_node)
 
-                    # print(
-                    #     node.tuple_id_for_head_type(head_type),
-                    #     f"Contrib: {total_contrib:.3g}%",
-                    # )
+    def update_co_occurrences_for_node(self, node):
+        features_at_heads = self.get_features_at_heads_in_graph()
+        features_at_mlps = self.get_features_at_mlps_in_graph()
+
+        if isinstance(node, CircuitDiscoveryHeadNode):
+            layer, head = node.layer, node.head
+            component1 = (CircuitComponent.ATTN_HEAD, layer, head)
+            features1 = features_at_heads[layer][head]
+
+            # Update co-occurrences with all other components
+            for other_layer in range(self.model.cfg.n_layers):
+                for other_head in range(self.model.cfg.n_heads):
+                    if other_layer == layer and other_head == head:
+                        continue
+                    component2 = (CircuitComponent.ATTN_HEAD, other_layer, other_head)
+                    features2 = features_at_heads[other_layer][other_head]
+                    for feature_tuple in [(f1, f2) for f1 in features1 for f2 in features2]:
+                        self.update_co_occurrence(component1, component2, feature_tuple)
+
+                component2 = (CircuitComponent.MLP_FEATURE, other_layer)
+                features2 = features_at_mlps[other_layer]
+                for feature_tuple in [(f1, f2) for f1 in features1 for f2 in features2]:
+                    self.update_co_occurrence(component1, component2, feature_tuple)
+
+        elif isinstance(node, CircuitDiscoveryRegularNode):
+            if node.component == CircuitComponent.MLP_FEATURE:
+                layer = node.layer
+                component1 = (CircuitComponent.MLP_FEATURE, layer)
+                features1 = features_at_mlps[layer]
+
+                # Update co-occurrences with all other components
+                for other_layer in range(self.model.cfg.n_layers):
+                    for other_head in range(self.model.cfg.n_heads):
+                        component2 = (CircuitComponent.ATTN_HEAD, other_layer, other_head)
+                        features2 = features_at_heads[other_layer][other_head]
+                        for feature_tuple in [(f1, f2) for f1 in features1 for f2 in features2]:
+                            self.update_co_occurrence(component1, component2, feature_tuple)
+
+                    if other_layer != layer:
+                        component2 = (CircuitComponent.MLP_FEATURE, other_layer)
+                        features2 = features_at_mlps[other_layer]
+                        for feature_tuple in [(f1, f2) for f1 in features1 for f2 in features2]:
+                            self.update_co_occurrence(component1, component2, feature_tuple)
 
     def attn_heads_tensor(self, visualize=False):
         attn_heads = torch.zeros(12, 12)
@@ -1637,8 +1739,7 @@ class CircuitDiscovery:
             if isinstance(node, CircuitDiscoveryRegularNode):
                 top_contribs = node.get_top_unused_contributors()
                 for contributor, value in top_contribs[:contributors_per_node]:
-                    print(f"Node: {node.tuple_id}, Contributor: {contributor}, Value: {value}")
-                    contributor_node = node.add_contributor_edge(contributor)
+                    contributor_node = node.add_contributor_edge(contributor, weight=value)
                     self.transformer_model.edge_tracker.add_edge(node.tuple_id, contributor_node.tuple_id, weight=value)
                     queue.append(contributor_node)
 
@@ -1646,10 +1747,10 @@ class CircuitDiscovery:
                 for head_type in ["q", "k", "v"]:
                     top_contribs = node.get_top_unused_contributors(head_type)
                     for contributor, value in top_contribs[:contributors_per_node]:
-                        print(f"Node: {node.tuple_id}, Head Type: {head_type}, Contributor: {contributor}, Value: {value}")
-                        contributor_node = node.add_contributor_edge(head_type, contributor)
+                        contributor_node = node.add_contributor_edge(head_type, contributor, weight=value)
                         self.transformer_model.edge_tracker.add_edge(node.tuple_id, contributor_node.tuple_id, weight=value)
                         queue.append(contributor_node)
+
 
 
     def recursive_explore_all_nodes(self, root_node, contributors_per_node=1):
@@ -1682,6 +1783,8 @@ class CircuitDiscovery:
         """
         self.reset_graph()
         self.recursive_explore_all_nodes(self.root_node, contributors_per_node)
+        #self.collect_co_occurrences()
+
 
 
 

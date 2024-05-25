@@ -28,13 +28,26 @@ from tabulate import tabulate
 
 
 class CircuitPrediction:
-    def __init__(self, attn_freqs, mlp_freqs, features_for_heads, features_for_mlps):
+    def __init__(self, attn_freqs, mlp_freqs, features_for_heads, features_for_mlps, co_occurrence_dict):
         self.attn_freqs = attn_freqs
         self.mlp_freqs = mlp_freqs
         self.features_for_heads = features_for_heads
         self.features_for_mlps = features_for_mlps
-        self.component_labels = self.get_component_labels()
-        self.circuit_hypergraph = self.create_circuit_hypergraph()
+        self.co_occurrence_dict = co_occurrence_dict
+
+    def display_co_occurrences(self):
+        for layer, data in self.co_occurrence_dict.items():
+            print(f"Layer {layer}:")
+            
+            # Display heads
+            print("  Heads:")
+            for head_data in data['heads']:
+                for (layer, head), info in head_data.items():
+                    print(f"    Head {head}: Count = {info['count']}, Features = {info['features']}")
+            
+            # Display mlps
+            mlp_info = data['mlps']
+            print(f"  MLP: Count = {mlp_info['count']}, Features = {mlp_info['features']}")
 
     def create_circuit_hypergraph(self):
         circuit_hypergraph = {label: {"freq": 0, "features": []} for label in self.component_labels}
@@ -109,6 +122,49 @@ class CircuitPrediction:
                         title="Unique features", x=labels, y=list(range(12)), color_continuous_scale="blues")
             fig.show()
         return unique_features_array
+    
+    def initialize_co_occurrence_dict(self):
+        co_occurrence_dict = {}
+        for layer in range(self.model.cfg.n_layers):
+            co_occurrence_dict[layer] = {
+                "heads": [{(i, j): {"count": 0, "features": set()} for j in range(self.model.cfg.n_heads)} for i in range(self.model.cfg.n_heads)],
+                "mlps": {"count": 0, "features": set()}
+            }
+        return co_occurrence_dict
+
+    def get_co_occurrence(self, component1, component2):
+        if component1[0] == CircuitComponent.ATTN_HEAD and component2[0] == CircuitComponent.ATTN_HEAD:
+            layer1, head1 = component1[1], component1[2]
+            layer2, head2 = component2[1], component2[2]
+            return self.co_occurrence_dict[layer1]["heads"][head1][(layer2, head2)]
+        elif component1[0] == CircuitComponent.MLP_FEATURE and component2[0] == CircuitComponent.MLP_FEATURE:
+            layer = component1[1]
+            return self.co_occurrence_dict[layer]["mlps"]
+        else:
+            return None
+
+    def get_co_occurrence_features(self, component1, component2):
+        co_occurrence_data = self.get_co_occurrence(component1, component2)
+        if co_occurrence_data:
+            return co_occurrence_data["features"]
+        return set()
+
+    def get_co_occurrence_count(self, component1, component2):
+        co_occurrence_data = self.get_co_occurrence(component1, component2)
+        if co_occurrence_data:
+            return co_occurrence_data["count"]
+        return 0
+
+    def add_co_occurrence(self, component1, component2, feature):
+        if component1[0] == CircuitComponent.ATTN_HEAD and component2[0] == CircuitComponent.ATTN_HEAD:
+            layer1, head1 = component1[1], component1[2]
+            layer2, head2 = component2[1], component2[2]
+            self.co_occurrence_dict[layer1]["heads"][head1][(layer2, head2)]["count"] += 1
+            self.co_occurrence_dict[layer1]["heads"][head1][(layer2, head2)]["features"].add(feature)
+        elif component1[0] == CircuitComponent.MLP_FEATURE and component2[0] == CircuitComponent.MLP_FEATURE:
+            layer = component1[1]
+            self.co_occurrence_dict[layer]["mlps"]["count"] += 1
+            self.co_occurrence_dict[layer]["mlps"]["features"].add(feature)
 
 
 def tokenize_and_concatenate(dataset, tokenizer, streaming=False, max_length=1024, column_name="text", add_bos_token=True):
@@ -205,7 +261,7 @@ def get_top_k_activating_examples(feature_scores, tokens, model, k=5):
     return top_k_tokens_str, top_k_scores_per_seq, top_k_seq_indices
 
 
-def highlight_scores_in_html(token_strs, scores, max_color='#ff8c00', zero_color='#ffffff', show_score=True):
+def highlight_scores_in_html(token_strs, scores, seq_idx, max_color='#ff8c00', zero_color='#ffffff', show_score=True):
     if len(token_strs) != len(scores):
         print("Length mismatch between tokens and scores")
         return "", ""
@@ -244,13 +300,14 @@ def highlight_scores_in_html(token_strs, scores, max_color='#ff8c00', zero_color
     return head + tokens_html, clean_text
 
 
-def display_top_k_activating_examples(model, feature_scores, tokens, k=5, show_score=True):
+def display_top_k_activating_examples(model, feature_scores, tokens, k=5, show_score=True, display_html=True):
     top_k_tokens_str, top_k_scores_per_seq, top_k_seq_indices = get_top_k_activating_examples(feature_scores, tokens, model, k=k)
     examples_html = []
     examples_clean_text = []
     for i in range(k):
         example_html, clean_text = highlight_scores_in_html(top_k_tokens_str[i], top_k_scores_per_seq[i], top_k_seq_indices[i], show_score=show_score)
-        display(HTML(example_html))
+        if display_html:
+            display(HTML(example_html))
         examples_html.append(example_html)
         examples_clean_text.append(clean_text)
     return examples_html, examples_clean_text
@@ -261,7 +318,7 @@ def display_top_k_activating_examples_sum(model, feature_scores, tokens, feature
     examples_html = []
     examples_clean_text = []
     for i in range(k):
-        example_html, clean_text = highlight_scores_in_html(top_k_tokens_str[i], top_k_scores_per_seq[i], show_score=show_score)
+        example_html, clean_text = highlight_scores_in_html(top_k_tokens_str[i], top_k_scores_per_seq[i], top_k_seq_indices[i], show_score=show_score)
         display(HTML(example_html))
         examples_html.append(example_html)
         examples_clean_text.append(clean_text)
@@ -330,10 +387,10 @@ def get_response(llm_client, examples_clean_text, top_tokens):
     )
     return f"{response.choices[0].message.content}"
 
-
 def get_circuit_prediction(task: str = 'ioi', N: int = 50):
     torch.set_grad_enabled(False)
     dataset_prompts = gen_templated_prompts(template_idex=1, N=500)
+
     def component_filter(component: str):
         return component in [
             CircuitComponent.Z_FEATURE,
@@ -344,6 +401,7 @@ def get_circuit_prediction(task: str = 'ioi', N: int = 50):
             CircuitComponent.POS_EMBED,
             CircuitComponent.Z_SAE_ERROR,
         ]
+
     pass_based = True
     passes = 5
     node_contributors = 1
@@ -355,6 +413,7 @@ def get_circuit_prediction(task: str = 'ioi', N: int = 50):
     num_greedy_passes = 20
     k = 1
     thres = 4
+
     def strategy(cd: CircuitDiscovery):
         if pass_based:
             for _ in range(passes):
@@ -365,12 +424,64 @@ def get_circuit_prediction(task: str = 'ioi', N: int = 50):
         else:
             for _ in range(num_greedy_passes):
                 cd.greedily_add_top_contributors(k=k, reciever_threshold=thres)
+
     task_eval = TaskEvaluation(prompts=dataset_prompts, circuit_discovery_strategy=strategy, allowed_components_filter=component_filter)
-    # cd = task_eval.get_circuit_discovery_for_prompt(20)
+
     features_for_heads = task_eval.get_features_at_heads_over_dataset(N=N, use_set=False)
     features_for_mlps = task_eval.get_features_at_mlps_over_dataset(N=N, use_set=False)
     mlp_freqs = task_eval.get_mlp_freqs_over_dataset(N=N, return_freqs=True, visualize=False)
     attn_freqs = task_eval.get_attn_head_freqs_over_dataset(N=N, subtract_counter_factuals=False, return_freqs=True, visualize=False)
-    cp = CircuitPrediction(attn_freqs, mlp_freqs, features_for_heads, features_for_mlps)
+
+    # Create CircuitDiscovery object
+    cd = task_eval.get_circuit_discovery_for_prompt(20)
+    cd.build_directed_graph(contributors_per_node=1)
+
+    # Create CircuitPrediction object
+    cp = CircuitPrediction(attn_freqs, mlp_freqs, features_for_heads, features_for_mlps, cd.co_occurrence_dict)
+
     return cp
+ 
+
+# def get_circuit_prediction(task: str = 'ioi', N: int = 50):
+#     torch.set_grad_enabled(False)
+#     dataset_prompts = gen_templated_prompts(template_idex=1, N=500)
+#     def component_filter(component: str):
+#         return component in [
+#             CircuitComponent.Z_FEATURE,
+#             CircuitComponent.MLP_FEATURE,
+#             CircuitComponent.ATTN_HEAD,
+#             CircuitComponent.UNEMBED,
+#             CircuitComponent.EMBED,
+#             CircuitComponent.POS_EMBED,
+#             CircuitComponent.Z_SAE_ERROR,
+#         ]
+#     pass_based = True
+#     passes = 5
+#     node_contributors = 1
+#     first_pass_minimal = True
+#     sub_passes = 3
+#     do_sub_pass = False
+#     layer_thres = 9
+#     minimal = True
+#     num_greedy_passes = 20
+#     k = 1
+#     thres = 4
+#     def strategy(cd: CircuitDiscovery):
+#         if pass_based:
+#             for _ in range(passes):
+#                 cd.add_greedy_pass(contributors_per_node=node_contributors, minimal=first_pass_minimal)
+#                 if do_sub_pass:
+#                     for _ in range(sub_passes):
+#                         cd.add_greedy_pass_against_all_existing_nodes(contributors_per_node=node_contributors, skip_z_features=True, layer_threshold=layer_thres, minimal=minimal)
+#         else:
+#             for _ in range(num_greedy_passes):
+#                 cd.greedily_add_top_contributors(k=k, reciever_threshold=thres)
+#     task_eval = TaskEvaluation(prompts=dataset_prompts, circuit_discovery_strategy=strategy, allowed_components_filter=component_filter)
+#     # cd = task_eval.get_circuit_discovery_for_prompt(20)
+#     features_for_heads = task_eval.get_features_at_heads_over_dataset(N=N, use_set=False)
+#     features_for_mlps = task_eval.get_features_at_mlps_over_dataset(N=N, use_set=False)
+#     mlp_freqs = task_eval.get_mlp_freqs_over_dataset(N=N, return_freqs=True, visualize=False)
+#     attn_freqs = task_eval.get_attn_head_freqs_over_dataset(N=N, subtract_counter_factuals=False, return_freqs=True, visualize=False)
+#     cp = CircuitPrediction(attn_freqs, mlp_freqs, features_for_heads, features_for_mlps)
+#     return cp
     
