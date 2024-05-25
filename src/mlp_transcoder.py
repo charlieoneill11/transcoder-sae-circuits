@@ -211,6 +211,30 @@ class SparseTranscoder(HookedRootModule):
         )
         feature_acts = self.hook_hidden_post(torch.nn.functional.relu(hidden_pre))
         return feature_acts
+    
+    def decode(self, feature_acts):
+        if self.cfg.is_transcoder:
+            # dumb if statement to deal with transcoders
+            # hopefully branch prediction takes care of this
+            sae_out = self.hook_sae_out(
+                einops.einsum(
+                    feature_acts,
+                    self.W_dec,
+                    "... d_sae, d_sae d_out -> ... d_out",
+                )
+                + self.b_dec_out
+            )
+        else:
+            sae_out = self.hook_sae_out(
+                einops.einsum(
+                    feature_acts,
+                    self.W_dec,
+                    "... d_sae, d_sae d_out -> ... d_out",
+                )
+                + self.b_dec
+            )
+
+        return sae_out
 
 
     def get_sparse_connection_loss(self):

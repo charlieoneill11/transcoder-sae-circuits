@@ -21,6 +21,10 @@ from data.ioi_dataset import gen_templated_prompts, IOI_GROUND_TRUTH_HEADS
 from data.greater_than_dataset import generate_greater_than_dataset, GT_GROUND_TRUTH_HEADS
 from circuit_discovery import CircuitDiscovery
 from plotly_utils import *
+from autointerp_prompts import get_opening_prompt
+
+from termcolor import colored
+from tabulate import tabulate
 
 
 class CircuitPrediction:
@@ -181,7 +185,11 @@ def get_feature_scores(model, encoder, tokens_arr, feature_indices, batch_size=6
             if ignore_endoftext:
                 cur_scores[tokens_arr[i:i+batch_size].reshape(-1) == endoftext_token] = -torch.inf
 
-        scores.append(to_numpy(cur_scores.reshape(-1, len(feature_indices), tokens_arr.shape[1])).astype(np.float16))
+        scores.append(
+            to_numpy(
+                einops.rearrange(cur_scores, "(b pos) n -> b n pos", pos=tokens_arr.shape[1])
+            ).astype(np.float16)
+        )
 
     return np.concatenate(scores, axis=0)
 
@@ -197,7 +205,7 @@ def get_top_k_activating_examples(feature_scores, tokens, model, k=5):
     return top_k_tokens_str, top_k_scores_per_seq, top_k_seq_indices
 
 
-def highlight_scores_in_html(token_strs, scores, seq_idx, max_color='#ff8c00', zero_color='#ffffff', show_score=True):
+def highlight_scores_in_html(token_strs, scores, max_color='#ff8c00', zero_color='#ffffff', show_score=True):
     if len(token_strs) != len(scores):
         print("Length mismatch between tokens and scores")
         return "", ""
@@ -248,19 +256,74 @@ def display_top_k_activating_examples(model, feature_scores, tokens, k=5, show_s
     return examples_html, examples_clean_text
 
 
-def get_response(llm_client, prompt):
-    BASE_PROMPT = """ 
-    We're studying neurons in a neural network, trying to identify their roles. \
-    Look at the parts/tokens of the document this particular neuron activates \
-    highly for and summarize in a single sentence what the neuron is \
-    looking for. Don't list examples of words.We will show short text excerpts, \
-    followed by a comma separated list of tokens(part of word) that activate \
-    highly in those text excerpts. The format is word (score). Your task \
-    is to summarize what the highly activating tokens have in common, \
-    taking their context into account. 
-    """
-    prompt = "\n\n".join(prompt)
-    messages = [{"role": "user", "content": BASE_PROMPT + prompt}]
+def display_top_k_activating_examples_sum(model, feature_scores, tokens, feature_indices, k=5, show_score=True):
+    top_k_tokens_str, top_k_scores_per_seq, top_k_seq_indices = get_top_k_activating_examples_sum(feature_scores, tokens, model, feature_indices, k=k)
+    examples_html = []
+    examples_clean_text = []
+    for i in range(k):
+        example_html, clean_text = highlight_scores_in_html(top_k_tokens_str[i], top_k_scores_per_seq[i], show_score=show_score)
+        display(HTML(example_html))
+        examples_html.append(example_html)
+        examples_clean_text.append(clean_text)
+    return examples_html, examples_clean_text
+
+def get_top_k_activating_examples_sum(feature_scores, tokens, model, feature_indices, k=5):
+    feature_scores_summed = np.sum(feature_scores, axis=1)
+    # Sum the activations for the specified features
+    summed_scores_initial = np.sum(feature_scores[:, feature_indices, :], axis=-1)
+    summed_scores = np.sum(summed_scores_initial, axis=-1)
+    # Add extra dim at end
+    summed_scores = summed_scores[:, np.newaxis]
+    
+    flat_scores = summed_scores.flatten()
+    top_k_indices = flat_scores.argsort()[-k:][::-1]
+    top_k_scores = flat_scores[top_k_indices]
+    
+    top_k_batch_indices, top_k_seq_indices = np.unravel_index(top_k_indices, summed_scores.shape)
+    top_k_tokens = [tokens[batch_idx].tolist() for batch_idx in top_k_batch_indices]
+    top_k_tokens_str = [[model.to_string(x) for x in token_seq] for token_seq in top_k_tokens]
+    top_k_scores_per_seq = [feature_scores_summed[batch_idx].tolist() for batch_idx in top_k_batch_indices]
+
+    return top_k_tokens_str, top_k_scores_per_seq, top_k_seq_indices
+
+
+def get_top_logits(model, encoder, features, act_strength=4.0, dict_size=24576):
+    hidden_acts = torch.zeros(dict_size, device='cpu')
+    if isinstance(features, list):
+        for feature in features:
+            hidden_acts[feature] = act_strength
+    else:
+        hidden_acts[features] = act_strength  # Single feature case
+
+    hidden_acts = hidden_acts.unsqueeze(0)
+    hidden_acts = encoder.decode(hidden_acts)
+    logits = einops.einsum(
+        hidden_acts.to('cpu'), model.W_U.to('cpu'),
+        'b h, h l -> b l'
+    )
+    return logits
+
+def get_top_k_tokens(model, encoder, features, dict_size=24576, act_strength=4.0, k=10):
+    logits = get_top_logits(model, encoder, features, act_strength, dict_size)
+    top_k = torch.topk(logits, k)
+    top_k_indices = top_k.indices.squeeze().tolist()
+    top_k_logits = top_k.values.squeeze().tolist()
+    top_k_tokens = [model.to_string(x) for x in top_k_indices]
+    return top_k_tokens, top_k_logits
+
+def pretty_print_tokens_logits(tokens, logits):
+    table = [["Token", "Logit"]]
+    for token, logit in zip(tokens, logits):
+        token_str = colored(token, 'blue')
+        logit_str = colored(f"{logit:.4f}", 'green')
+        table.append([token_str, logit_str])
+    
+    print(tabulate(table, headers="firstrow", tablefmt="fancy_grid"))
+
+
+def get_response(llm_client, examples_clean_text, top_tokens):
+    opening_prompt = get_opening_prompt(examples_clean_text, top_tokens)
+    messages = [{"role": "user", "content": opening_prompt}]
     response = llm_client.chat.completions.create(
         model="gpt4_large",
         messages=messages,

@@ -75,6 +75,10 @@ class ZSAE(nn.Module):
         x_cent = x - self.b_dec
         acts = F.relu(x_cent @ self.W_enc + self.b_enc)
         return acts
+    
+    def decode(self, acts):
+        x_reconstruct = acts @ self.W_dec + self.b_dec
+        return x_reconstruct
 
     @classmethod
     def load_from_hf(cls, version, hf_repo="ckkissane/tinystories-1M-SAES"):
