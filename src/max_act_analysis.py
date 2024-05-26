@@ -90,12 +90,34 @@ class MaxActAnalysis:
 
         return cd
 
+    def get_context_referenced_prompts_for_range(
+        self,
+        start,
+        end,
+        token_lr=("<<", ">>"),
+        context_lr=("[[", "]]"),
+        merge_nearby_context=False,
+    ):
+        prompts = []
+
+        for i in trange(start, end):
+            p, ap = self.get_context_referenced_prompt(
+                i,
+                token_lr=token_lr,
+                context_lr=context_lr,
+                merge_nearby_context=merge_nearby_context,
+            )
+
+            prompts.append((p, ap))
+
+        return prompts
+
     def get_context_referenced_prompt(
         self,
         i,
         token_lr=("<<", ">>"),
         context_lr=("[[", "]]"),
-        merge_nearby_context=True,
+        merge_nearby_context=False,
     ):
         tl, tr = token_lr
         cl, cr = context_lr

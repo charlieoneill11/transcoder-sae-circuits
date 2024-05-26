@@ -1,13 +1,9 @@
 # %%
-import openai
+import sys
 import yaml
+from openai import OpenAI
+
+from openai_utils import gen_openai_completion
 
 # %%
-with open("config.yaml", "r") as file:
-    data = yaml.safe_load(file)
-
-# Print the content of the YAML file
-print(data)
-# %%
-
-# %%
+out = gen_openai_completion("Why is the sky blue? (2 sentence answer)")

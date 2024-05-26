@@ -817,8 +817,6 @@ class CircuitDiscovery:
             ):
                 return
 
-            print(node, node.seq_index)
-
             pos_set.add(node.seq_index)
 
         fn = partial(visit, pos_set=pos_set)
@@ -828,9 +826,88 @@ class CircuitDiscovery:
             pos_set.discard(0)
 
         final = sorted(list(pos_set))
-        print(final)
 
         return final
+
+    
+    def get_context_referenced_prompt(
+        self,
+        token_lr=("<<", ">>"),
+        context_lr=("[[", "]]"),
+        merge_nearby_context=False,
+    ):
+        tl, tr = token_lr
+        cl, cr = context_lr
+
+        pos = self.seq_index
+        context_token_pos = self.get_token_pos_referenced_by_graph(no_bos=True)
+
+        str_tokens: List[str] = self.model.to_str_tokens(self.tokens)  # type: ignore
+
+        if pos in context_token_pos:
+            context_token_pos.remove(pos)
+
+        prompt = "".join(str_tokens[1 : pos + 1])
+
+        if not context_token_pos:
+            prompt_with_emphasis = (
+                "".join(str_tokens[1:pos]) + f"{tl}{str_tokens[pos]}{tr}"
+            )
+            return prompt, prompt_with_emphasis
+
+        if not merge_nearby_context:
+            prompt_with_context = ""
+
+            for i, tok in enumerate(str_tokens[:pos]):
+                if i == 0:
+                    continue
+
+                if i in context_token_pos:
+                    prompt_with_context += f"{cl}{tok}{cr}"
+                else:
+                    prompt_with_context += tok
+
+            prompt_with_context += f"{tl}{str_tokens[pos]}{tr}"
+
+            return prompt, prompt_with_context
+
+        token_ranges = []
+
+        i = 0
+
+        while i < len(self.tokens):
+            if i in context_token_pos:
+                range_start = i
+
+                k = i + 1
+
+                while k < len(self.tokens):
+                    if k in context_token_pos:
+                        k += 1
+                    else:
+                        break
+
+                token_ranges.append((range_start, k))
+                i = k
+            else:
+                i += 1
+
+        prompt_with_context = "".join(str_tokens[1 : token_ranges[0][0]])
+
+        for i, token_range in enumerate(token_ranges):
+            if i == len(token_ranges) - 1:
+                next_start = pos
+            else:
+                next_start = token_ranges[i + 1][0]
+
+            s, e = token_range
+
+            prompt_with_context += f"{cl}{''.join(str_tokens[s:e])}{cr}"
+            prompt_with_context += "".join(str_tokens[e:next_start])
+
+        prompt_with_context += f"{tl}{str_tokens[pos]}{tr}"
+
+        return prompt, prompt_with_context
 
     def all_nodes_in_graph(self):
         all_nodes = []
