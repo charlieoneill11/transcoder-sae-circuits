@@ -11,6 +11,7 @@ from z_sae import ZSAE
 from mlp_transcoder import SparseTranscoder
 from openai import AzureOpenAI
 from transformer_lens.utils import to_numpy
+from collections import defaultdict, Counter
 
 from datasets import load_dataset
 from huggingface_hub import HfApi
@@ -33,6 +34,9 @@ class CircuitPrediction:
         self.mlp_freqs = mlp_freqs
         self.features_for_heads = features_for_heads
         self.features_for_mlps = features_for_mlps
+        self.component_labels = self.get_component_labels()
+        self.circuit_hypergraph = self.create_circuit_hypergraph()
+
         self.co_occurrence_dict = self.symmetric_co_occurrence_dict(self.clean_co_occurrence_dict(co_occurrence_dict))
 
     def clean_co_occurrence_dict(self, co_occurrence_dict):
@@ -68,6 +72,37 @@ class CircuitPrediction:
                     symmetric_dict[set_key] = feature_tuples
 
         return symmetric_dict
+    
+    def parse_component(self, component_str):
+        """
+        Parse the component string to return the appropriate tuple key.
+        """
+        if component_str.startswith("MLP"):
+            layer = int(component_str[3:])
+            return ('mlp_feature', layer)
+        elif component_str.startswith("L") and "H" in component_str:
+            layer, head = map(int, component_str[1:].split("H"))
+            return ('attn_head', layer, head)
+        else:
+            raise ValueError(f"Invalid component format: {component_str}")
+
+    def get_cooccurrences(self, component1_str, component2_str):
+        """
+        Retrieve co-occurrences between two components given their string representations.
+        Ensures symmetry in retrieval.
+        """
+        component1 = self.parse_component(component1_str)
+        component2 = self.parse_component(component2_str)
+        
+        # Create a sorted tuple to ensure symmetry
+        key = tuple(sorted((component1, component2)))
+        
+        if key in self.co_occurrence_dict:
+            return self.co_occurrence_dict[key], key
+        elif (key[1], key[0]) in self.co_occurrence_dict:
+            return self.co_occurrence_dict[(key[1], key[0])], (key[1], key[0])
+        else:
+            return [], None
     
     def display_co_occurrences(self):
         for layer, data in self.co_occurrence_dict.items():
@@ -156,6 +191,74 @@ class CircuitPrediction:
                         title="Unique features", x=labels, y=list(range(12)), color_continuous_scale="blues")
             fig.show()
         return unique_features_array
+    
+    def get_top_k_feature_tuples(self, k=5):
+        # Use a Counter to count the occurrences of each tuple
+        global_counter = Counter()
+
+        # Iterate through each component set and their feature lists
+        for component_set, feature_list in self.co_occurrence_dict.items():
+            for feature_tuple in feature_list:
+                # Create a sorted tuple to ensure (x, y) and (y, x) are treated the same
+                sorted_tuple = tuple(sorted(feature_tuple))
+                global_counter[(component_set, sorted_tuple)] += 1
+
+        # Get the top-k tuples by count
+        top_k_tuples = global_counter.most_common(k)
+        
+        # Create a dictionary to store the results
+        top_k_dict = defaultdict(dict)
+        
+        for (component_set, feature_tuple), count in top_k_tuples:
+            top_k_dict[component_set][feature_tuple] = count
+
+        return top_k_dict
+    
+    def visualize_co_occurrences(self):
+        num_layers = 12
+        num_heads = 12
+        num_components = num_layers * (num_heads + 1)
+        
+        # Create a mapping from components to indices
+        component_to_index = {}
+        index = 0
+        for layer in range(num_layers):
+            for head in range(num_heads):
+                component_to_index[('attn_head', layer, head)] = index
+                index += 1
+            component_to_index[('mlp_feature', layer)] = index
+            index += 1
+
+        # Initialize the co-occurrence matrix
+        co_occurrence_matrix = np.zeros((num_components, num_components))
+
+        # Populate the co-occurrence matrix
+        for comp_pair, co_occurrences in self.co_occurrence_dict.items():
+            comp1, comp2 = list(comp_pair)
+            index1 = component_to_index[comp1]
+            index2 = component_to_index[comp2]
+            co_occurrence_matrix[index1, index2] = len(co_occurrences)
+            co_occurrence_matrix[index2, index1] = len(co_occurrences)
+
+        # Create the labels for the heatmap
+        labels = []
+        for layer in range(num_layers):
+            for head in range(num_heads):
+                labels.append(f"L{layer}H{head}")
+            labels.append(f"MLP{layer}")
+
+        # Plot the heatmap using Plotly
+        fig = px.imshow(
+            co_occurrence_matrix,
+            labels=dict(x="Component", y="Component", color="Co-occurrence Count"),
+            x=labels,
+            y=labels,
+            color_continuous_scale="blues",
+            title="Component Co-occurrences Heatmap"
+        )
+        
+        fig.update_layout(width=800, height=800)
+        fig.show()
 
 
 def tokenize_and_concatenate(dataset, tokenizer, streaming=False, max_length=1024, column_name="text", add_bos_token=True):
@@ -240,6 +343,15 @@ def get_feature_scores(model, encoder, tokens_arr, feature_indices, batch_size=6
 
     return np.concatenate(scores, axis=0)
 
+def get_feature_scores_across_layers(model, encoder_feature_pairs, tokens_arr, act_name=None, batch_size=64):
+    combined_scores = []
+    for encoder, feature_indices in encoder_feature_pairs:
+        scores = get_feature_scores(model, encoder, tokens_arr, feature_indices, act_name=act_name, batch_size=batch_size)
+        combined_scores.append(scores)
+
+    # We want to combine the scores along the second dimension (features), as feature scores is shape (batch, features, tokens)
+    return np.stack(combined_scores, axis=1).squeeze()
+
 
 def get_top_k_activating_examples(feature_scores, tokens, model, k=5):
     flat_scores = feature_scores.flatten()
@@ -304,13 +416,14 @@ def display_top_k_activating_examples(model, feature_scores, tokens, k=5, show_s
     return examples_html, examples_clean_text
 
 
-def display_top_k_activating_examples_sum(model, feature_scores, tokens, feature_indices, k=5, show_score=True):
+def display_top_k_activating_examples_sum(model, feature_scores, tokens, feature_indices, k=5, show_score=True, display_html=True):
     top_k_tokens_str, top_k_scores_per_seq, top_k_seq_indices = get_top_k_activating_examples_sum(feature_scores, tokens, model, feature_indices, k=k)
     examples_html = []
     examples_clean_text = []
     for i in range(k):
         example_html, clean_text = highlight_scores_in_html(top_k_tokens_str[i], top_k_scores_per_seq[i], top_k_seq_indices[i], show_score=show_score)
-        display(HTML(example_html))
+        if display_html:
+            display(HTML(example_html))
         examples_html.append(example_html)
         examples_clean_text.append(clean_text)
     return examples_html, examples_clean_text
@@ -335,6 +448,30 @@ def get_top_k_activating_examples_sum(feature_scores, tokens, model, feature_ind
     return top_k_tokens_str, top_k_scores_per_seq, top_k_seq_indices
 
 
+# def get_top_logits(model, encoder, features, act_strength=4.0, dict_size=24576):
+#     hidden_acts = torch.zeros(dict_size, device='cpu')
+#     if isinstance(features, list):
+#         for feature in features:
+#             hidden_acts[feature] = act_strength
+#     else:
+#         hidden_acts[features] = act_strength  # Single feature case
+
+#     hidden_acts = hidden_acts.unsqueeze(0)
+#     hidden_acts = encoder.decode(hidden_acts)
+#     logits = einops.einsum(
+#         hidden_acts.to('cpu'), model.W_U.to('cpu'),
+#         'b h, h l -> b l'
+#     )
+#     return logits
+
+# def get_top_k_tokens(model, encoder, features, dict_size=24576, act_strength=4.0, k=10):
+#     logits = get_top_logits(model, encoder, features, act_strength, dict_size)
+#     top_k = torch.topk(logits, k)
+#     top_k_indices = top_k.indices.squeeze().tolist()
+#     top_k_logits = top_k.values.squeeze().tolist()
+#     top_k_tokens = [model.to_string(x) for x in top_k_indices]
+#     return top_k_tokens, top_k_logits
+
 def get_top_logits(model, encoder, features, act_strength=4.0, dict_size=24576):
     hidden_acts = torch.zeros(dict_size, device='cpu')
     if isinstance(features, list):
@@ -351,9 +488,16 @@ def get_top_logits(model, encoder, features, act_strength=4.0, dict_size=24576):
     )
     return logits
 
-def get_top_k_tokens(model, encoder, features, dict_size=24576, act_strength=4.0, k=10):
-    logits = get_top_logits(model, encoder, features, act_strength, dict_size)
-    top_k = torch.topk(logits, k)
+def get_combined_logits(model, encoder_feature_pairs, act_strength=4.0, dict_size=24576):
+    combined_logits = torch.zeros((1, model.W_U.size(1)), device='cpu')
+    for encoder, features in encoder_feature_pairs:
+        logits = get_top_logits(model, encoder, features, act_strength, dict_size)
+        combined_logits += logits
+    return combined_logits
+
+def get_top_k_tokens(model, encoder_feature_pairs, dict_size=24576, act_strength=4.0, k=10):
+    combined_logits = get_combined_logits(model, encoder_feature_pairs, act_strength, dict_size)
+    top_k = torch.topk(combined_logits, k)
     top_k_indices = top_k.indices.squeeze().tolist()
     top_k_logits = top_k.values.squeeze().tolist()
     top_k_tokens = [model.to_string(x) for x in top_k_indices]
@@ -418,17 +562,24 @@ def get_circuit_prediction(task: str = 'ioi', N: int = 50):
 
     task_eval = TaskEvaluation(prompts=dataset_prompts, circuit_discovery_strategy=strategy, allowed_components_filter=component_filter)
 
-    features_for_heads = task_eval.get_features_at_heads_over_dataset(N=N, use_set=False)
-    features_for_mlps = task_eval.get_features_at_mlps_over_dataset(N=N, use_set=False)
-    mlp_freqs = task_eval.get_mlp_freqs_over_dataset(N=N, return_freqs=True, visualize=False)
-    attn_freqs = task_eval.get_attn_head_freqs_over_dataset(N=N, subtract_counter_factuals=False, return_freqs=True, visualize=False)
+    # features_for_heads = task_eval.get_features_at_heads_over_dataset(N=N, use_set=False)
+    # features_for_mlps = task_eval.get_features_at_mlps_over_dataset(N=N, use_set=False)
+    # mlp_freqs = task_eval.get_mlp_freqs_over_dataset(N=N, return_freqs=True, visualize=False)
+    # attn_freqs = task_eval.get_attn_head_freqs_over_dataset(N=N, subtract_counter_factuals=False, return_freqs=True, visualize=False)
 
-    # Create CircuitDiscovery object
-    cd = task_eval.get_circuit_discovery_for_prompt(20)
-    cd.build_directed_graph(contributors_per_node=1)
+    results = task_eval.process_all_metrics_over_dataset(N=N, visualize=False, subtract_counter_factuals=False, use_set=False)
+    features_for_heads = results["features_for_heads"]
+    features_for_mlps = results["features_for_mlps"]
+    mlp_freqs = results["mlp_freqs"]
+    attn_freqs = results["attn_head_freqs"]
+    co_occurrence_dict = results["co_occurrence_dict"]
+
+    # # Create CircuitDiscovery object
+    # cd = task_eval.get_circuit_discovery_for_prompt(20)
+    # cd.build_directed_graph(contributors_per_node=1)
 
     # Create CircuitPrediction object
-    cp = CircuitPrediction(attn_freqs, mlp_freqs, features_for_heads, features_for_mlps, cd.co_occurrence_dict)
+    cp = CircuitPrediction(attn_freqs, mlp_freqs, features_for_heads, features_for_mlps, co_occurrence_dict)
 
     return cp
  

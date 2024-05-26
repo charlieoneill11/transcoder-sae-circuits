@@ -5,6 +5,7 @@ import einops
 
 from circuit_discovery import CircuitDiscovery, all_allowed, CircuitComponent
 from circuit_lens import get_model_encoders
+from collections import defaultdict
 from typing import List, Callable, Set
 from transformer_lens import ActivationCache
 from transformer_lens.hook_points import HookPoint
@@ -221,6 +222,74 @@ class TaskEvaluation:
             print(f"Average normalized logit difference: {normalized*100:.3g}%")
 
         return normalized
+        
+    def get_weighted_attn_head_freqs_over_dataset(self, N=None, visualize=True, return_freqs=True, **kwargs):
+        if N is None:
+            N = len(self.prompts)
+
+        head_freqs = torch.zeros(12, 12)
+        total_contributions = torch.zeros(12, 12)
+
+        for i in trange(N):
+            cd = self.get_circuit_discovery_for_prompt(i, **kwargs)
+            head_freqs = head_freqs + cd.attn_heads_tensor()
+
+            for layer in range(12):
+                for head in range(12):
+                    contributions = cd.transformer_model.edge_tracker.get_total_contributions(CircuitComponent.ATTN_HEAD, layer, head)
+                    total_contributions[layer, head] += contributions
+
+        weighted_head_freqs = head_freqs * total_contributions
+
+        if visualize:
+            imshow(weighted_head_freqs, title="Weighted Attn Head Freqs for Strategy + Task", labels={"x": "Head", "y": "Layer"})
+
+        if return_freqs:
+            return weighted_head_freqs
+
+
+    # def get_features_at_heads_over_dataset(self, N=None):
+    #     if N is None:
+    #         N = len(self.prompts)
+
+    #     n_layers = self.model.cfg.n_layers
+    #     n_heads = self.model.cfg.n_heads
+
+    #     features_for_heads = [[set() for _ in range(n_heads)] for _ in range(n_layers)]
+
+    #     for i in trange(N):
+    #         cd = self.get_circuit_discovery_for_prompt(i)
+
+    #         prompt_features_for_heads = cd.get_features_at_heads_in_graph()
+
+    #         for layer in range(n_layers):
+    #             for head in range(n_heads):
+    #                 features_for_heads[layer][head].update(
+    #                     prompt_features_for_heads[layer][head]
+    #                 )
+
+    #     return features_for_heads
+    
+    # def get_features_at_mlps_over_dataset(self, N=None):
+
+    #     if N is None:
+    #         N = len(self.prompts)
+
+    #     n_layers = self.model.cfg.n_layers
+
+    #     features_for_mlps = [set() for _ in range(n_layers)]
+
+    #     for i in trange(N):
+    #         cd = self.get_circuit_discovery_for_prompt(i)
+
+    #         prompt_features_for_mlps = cd.get_features_at_mlps_in_graph()
+
+    #         for layer in range(n_layers):
+    #             features_for_mlps[layer].update(
+    #                 prompt_features_for_mlps[layer]
+    #             )
+
+    #     return features_for_mlps
 
     def get_attn_head_freqs_over_dataset(
         self,
@@ -295,74 +364,6 @@ class TaskEvaluation:
 
         if return_freqs:
             return mlp_freqs
-        
-    def get_weighted_attn_head_freqs_over_dataset(self, N=None, visualize=True, return_freqs=True, **kwargs):
-        if N is None:
-            N = len(self.prompts)
-
-        head_freqs = torch.zeros(12, 12)
-        total_contributions = torch.zeros(12, 12)
-
-        for i in trange(N):
-            cd = self.get_circuit_discovery_for_prompt(i, **kwargs)
-            head_freqs = head_freqs + cd.attn_heads_tensor()
-
-            for layer in range(12):
-                for head in range(12):
-                    contributions = cd.transformer_model.edge_tracker.get_total_contributions(CircuitComponent.ATTN_HEAD, layer, head)
-                    total_contributions[layer, head] += contributions
-
-        weighted_head_freqs = head_freqs * total_contributions
-
-        if visualize:
-            imshow(weighted_head_freqs, title="Weighted Attn Head Freqs for Strategy + Task", labels={"x": "Head", "y": "Layer"})
-
-        if return_freqs:
-            return weighted_head_freqs
-
-
-    # def get_features_at_heads_over_dataset(self, N=None):
-    #     if N is None:
-    #         N = len(self.prompts)
-
-    #     n_layers = self.model.cfg.n_layers
-    #     n_heads = self.model.cfg.n_heads
-
-    #     features_for_heads = [[set() for _ in range(n_heads)] for _ in range(n_layers)]
-
-    #     for i in trange(N):
-    #         cd = self.get_circuit_discovery_for_prompt(i)
-
-    #         prompt_features_for_heads = cd.get_features_at_heads_in_graph()
-
-    #         for layer in range(n_layers):
-    #             for head in range(n_heads):
-    #                 features_for_heads[layer][head].update(
-    #                     prompt_features_for_heads[layer][head]
-    #                 )
-
-    #     return features_for_heads
-    
-    # def get_features_at_mlps_over_dataset(self, N=None):
-
-    #     if N is None:
-    #         N = len(self.prompts)
-
-    #     n_layers = self.model.cfg.n_layers
-
-    #     features_for_mlps = [set() for _ in range(n_layers)]
-
-    #     for i in trange(N):
-    #         cd = self.get_circuit_discovery_for_prompt(i)
-
-    #         prompt_features_for_mlps = cd.get_features_at_mlps_in_graph()
-
-    #         for layer in range(n_layers):
-    #             features_for_mlps[layer].update(
-    #                 prompt_features_for_mlps[layer]
-    #             )
-
-    #     return features_for_mlps
 
     def get_features_at_heads_over_dataset(self, N=None, use_set=True):
         if N is None:
@@ -411,6 +412,104 @@ class TaskEvaluation:
                     features_for_mlps[layer].extend(prompt_features_for_mlps[layer])
 
         return features_for_mlps
+    
+
+    def process_all_metrics_over_dataset(
+            self,
+            N=None,
+            visualize=True,
+            subtract_counter_factuals=False,
+            additional_title="",
+            use_set=True,
+            **kwargs,
+    ):
+        if N is None:
+            N = len(self.prompts)
+
+        # Initialize result containers
+        attn_head_freqs = torch.zeros(12, 12)
+        mlp_freqs = torch.zeros(12)
+        n_layers = self.model.cfg.n_layers
+        n_heads = self.model.cfg.n_heads
+
+        if use_set:
+            features_for_heads = [[set() for _ in range(n_heads)] for _ in range(n_layers)]
+            features_for_mlps = [set() for _ in range(n_layers)]
+        else:
+            features_for_heads = [[[] for _ in range(n_heads)] for _ in range(n_layers)]
+            features_for_mlps = [[] for _ in range(n_layers)]
+
+        co_occurrence_dict = defaultdict(lambda: defaultdict(list))
+
+        # Loop over the dataset
+        for i in trange(N):
+            cd = self.get_circuit_discovery_for_prompt(i, **kwargs)
+
+            if i == 0:
+                for key, value in cd.co_occurrence_dict.items():
+                    co_occurrence_dict[key] = defaultdict(list)
+
+            # Process attention head frequencies
+            attn_head_freqs = attn_head_freqs + cd.attn_heads_tensor()
+
+            if subtract_counter_factuals:
+                counter = self.get_circuit_discovery_for_prompt(i, use_counter_factual=True, **kwargs)
+                attn_head_freqs = attn_head_freqs - counter.attn_heads_tensor()
+
+            # Process MLP frequencies
+            mlp_freqs = mlp_freqs + cd.mlps_tensor()
+
+            if subtract_counter_factuals:
+                counter = self.get_circuit_discovery_for_prompt(i, use_counter_factual=True, **kwargs)
+                mlp_freqs = mlp_freqs - counter.mlps_tensor()
+
+            # Process features at heads
+            prompt_features_for_heads = cd.get_features_at_heads_in_graph()
+            for layer in range(n_layers):
+                for head in range(n_heads):
+                    if use_set:
+                        features_for_heads[layer][head].update(prompt_features_for_heads[layer][head])
+                    else:
+                        features_for_heads[layer][head].extend(prompt_features_for_heads[layer][head])
+
+            # Process features at MLPs
+            prompt_features_for_mlps = cd.get_features_at_mlps_in_graph()
+            for layer in range(n_layers):
+                if use_set:
+                    features_for_mlps[layer].update(prompt_features_for_mlps[layer])
+                else:
+                    features_for_mlps[layer].extend(prompt_features_for_mlps[layer])
+
+            # Process co_occurrence_dict
+            for key, value in cd.co_occurrence_dict.items():
+                for sub_key, sub_value in value.items():
+                    co_occurrence_dict[key][sub_key].extend(sub_value)
+
+        # normalise
+        attn_head_freqs = attn_head_freqs.float() / N
+        mlp_freqs = mlp_freqs.float() / N
+
+        if visualize:
+            imshow(
+                attn_head_freqs,
+                title="Attn Head Freqs for Strategy + Task " + additional_title,
+                labels={"x": "Head", "y": "Layer"},
+            )
+            imshow(
+                mlp_freqs.unsqueeze(0),
+                title="MLP Freqs for Strategy + Task " + additional_title,
+                labels={"x": "MLP"},
+            )
+
+        return {
+            "attn_head_freqs": attn_head_freqs,
+            "mlp_freqs": mlp_freqs,
+            "features_for_heads": features_for_heads,
+            "features_for_mlps": features_for_mlps,
+            "co_occurrence_dict": {k: dict(v) for k, v in co_occurrence_dict.items()},
+        }
+
+    
 
     def get_feature_count_for_heads_over_dataset(self, N=None):
         if N is None:
