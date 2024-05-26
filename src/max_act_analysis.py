@@ -167,7 +167,35 @@ class MaxActAnalysis:
 
             display(
                 cv.tokens.colored_tokens(
-                    tokens=str_tokens[min_index:max_index],
+                    tokens=str_tokens[min_index:max_index],  # type: ignore
                     values=scores[seq, min_index:max_index],
                 )
             )
+
+    def show_example(self, example_i, token_buffer=10, no_cutoff=False):
+        seq_pos, vals, scores = self.active_examples
+
+        seq, pos = seq_pos[example_i]
+        val = vals[example_i]
+
+        str_tokens = self.model.to_str_tokens(open_web_text_tokens[seq])
+
+        min_index = max(0, pos.item() - token_buffer)
+        max_index = pos.item() + token_buffer
+
+        if no_cutoff:
+            min_index = 0
+            max_index = len(str_tokens)
+
+        print(f"Token: '{str_tokens[pos]}' | Value: {val.item():.3g}")
+
+        display(
+            cv.tokens.colored_tokens(
+                tokens=str_tokens[min_index:max_index],  # type: ignore
+                values=scores[seq, min_index:max_index],
+            )
+        )
+
+    @property
+    def num_examples(self):
+        return self.active_examples[0].size(0)

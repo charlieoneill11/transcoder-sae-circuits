@@ -15,15 +15,22 @@ from discovery_strategies import (
 
 
 # %%
+
 torch.set_grad_enabled(False)
 
 
 # %%
-analyze = MaxActAnalysis("attn", 8, 16513, num_sequences=4000, batch_size=128)
+# feature = 16513
+# feature = 16401
+layer = 9
+feature = 15647
+# num_examples = 1000
+num_examples = 5_000
+
+analyze = MaxActAnalysis("attn", layer, feature, num_sequences=num_examples, batch_size=128)
+analyze.show_top_active_examples(num_examples=5)
 
 # %%
-
-# analyze.show_top_active_examples(num_examples=10)
 
 
 # %%
@@ -37,10 +44,9 @@ strategy = create_simple_greedy_strategy(
     # sub_pass_minimal=True,
 )
 
-
-
-i = 4
+i = 70
 sae_error = True
+no_sae_error = not sae_error
 
 # strategy = create_top_contributor_strategy(
 #     num_greedy_passes=5,
@@ -49,26 +55,36 @@ sae_error = True
 
 
 # comp_filter = create_filter(no_sae_error=not sae_error)
+# comp_filter = create_filter(no_sae_error=no_sae_error)
 comp_filter = create_filter()
+analyze.show_example(i)
 
 cd = analyze.get_circuit_discovery_for_max_activating_example(
     i, strategy=strategy, comp_filter=comp_filter
 )
 
-
 cd.print_attn_heads_and_mlps_in_graph()
 
 # %%
-
 cd.visualize_graph()
 
 # %%
+analyze.show_example(i, no_cutoff=True)
+
+# %%
+analyze.num_examples
+
+
+
+# %%
+
 cd.visualize_attn_heads_in_graph()
 
 # %%
 cd.component_lens_at_loc([0, 'q'])
 
-
+# %%
+cd.component_lens_at_loc_on_graph([0, 'q', 0, 0, 'v', 0, 0, 0, 'v'])
 
 
 # %%

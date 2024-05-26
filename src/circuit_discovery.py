@@ -1470,6 +1470,9 @@ class CircuitDiscovery:
 
         def visit(node: CircuitDiscoveryNode, min_max):
             if isinstance(node, CircuitDiscoveryRegularNode):
+                if node.seq_index == 0:
+                    return
+
                 if node.seq_index < min_max["min"]:
                     min_max["min"] = node.seq_index
 
@@ -1478,6 +1481,9 @@ class CircuitDiscovery:
 
             elif isinstance(node, CircuitDiscoveryHeadNode):
                 for pos in [node.source, node.dest]:
+                    if pos == 0:
+                        continue
+
                     if pos < min_max["min"]:
                         min_max["min"] = pos
 
