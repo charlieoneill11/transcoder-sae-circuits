@@ -806,6 +806,32 @@ class CircuitDiscovery:
 
         return all_ids
 
+    def get_token_pos_referenced_by_graph(self, no_bos=False) -> List[int]:
+        pos_set = set()
+
+        def visit(node, pos_set):
+            if not (
+                isinstance(node, CircuitDiscoveryRegularNode)
+                and node.component
+                in [CircuitComponent.EMBED, CircuitComponent.POS_EMBED]
+            ):
+                return
+
+            print(node, node.seq_index)
+
+            pos_set.add(node.seq_index)
+
+        fn = partial(visit, pos_set=pos_set)
+        self.traverse_graph(fn)
+
+        if no_bos:
+            pos_set.discard(0)
+
+        final = sorted(list(pos_set))
+        print(final)
+
+        return final
+
     def all_nodes_in_graph(self):
         all_nodes = []
 

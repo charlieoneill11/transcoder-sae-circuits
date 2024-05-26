@@ -7,6 +7,7 @@ from mlp_transcoder import SparseTranscoder
 from z_sae import ZSAE
 from transformer_lens import HookedTransformer
 from tqdm import trange
+from typing import List
 from IPython.display import display
 from discovery_strategies import BASIC_FILTER, BASIC_STRATEGY
 from circuit_discovery import CircuitDiscovery
@@ -88,6 +89,90 @@ class MaxActAnalysis:
         strategy(cd)
 
         return cd
+
+    def get_context_referenced_prompt(
+        self,
+        i,
+        token_lr=("<<", ">>"),
+        context_lr=("[[", "]]"),
+        merge_nearby_context=True,
+    ):
+        tl, tr = token_lr
+        cl, cr = context_lr
+
+        seq, pos, val = self.get_active_example(i)
+
+        tokens = open_web_text_tokens[seq][: pos + 1]
+        cd = self.get_circuit_discovery_for_max_activating_example(i)
+
+        context_token_pos = cd.get_token_pos_referenced_by_graph(no_bos=True)
+
+        str_tokens: List[str] = self.model.to_str_tokens(tokens)  # type: ignore
+
+        if pos in context_token_pos:
+            context_token_pos.remove(pos)
+
+        prompt = "".join(str_tokens[1 : pos + 1])
+
+        if not context_token_pos:
+            prompt_with_emphasis = (
+                "".join(str_tokens[1:pos]) + f"{tl}{str_tokens[pos]}{tr}"
+            )
+            return prompt, prompt_with_emphasis
+
+        if not merge_nearby_context:
+            prompt_with_context = ""
+
+            for i, tok in enumerate(str_tokens[:pos]):
+                if i == 0:
+                    continue
+
+                if i in context_token_pos:
+                    prompt_with_context += f"{cl}{tok}{cr}"
+                else:
+                    prompt_with_context += tok
+
+            prompt_with_context += f"{tl}{str_tokens[pos]}{tr}"
+
+            return prompt, prompt_with_context
+
+        token_ranges = []
+
+        i = 0
+
+        while i < len(tokens):
+            if i in context_token_pos:
+                range_start = i
+
+                k = i + 1
+
+                while k < len(tokens):
+                    if k in context_token_pos:
+                        k += 1
+                    else:
+                        break
+
+                token_ranges.append((range_start, k))
+                i = k
+            else:
+                i += 1
+
+        prompt_with_context = "".join(str_tokens[1 : token_ranges[0][0]])
+
+        for i, token_range in enumerate(token_ranges):
+            if i == len(token_ranges) - 1:
+                next_start = pos
+            else:
+                next_start = token_ranges[i + 1][0]
+
+            s, e = token_range
+
+            prompt_with_context += f"{cl}{''.join(str_tokens[s:e])}{cr}"
+            prompt_with_context += "".join(str_tokens[e:next_start])
+
+        prompt_with_context += f"{tl}{str_tokens[pos]}{tr}"
+
+        return prompt, prompt_with_context
 
     def get_active_example(self, i):
         seq_pos, vals, _ = self.active_examples
