@@ -725,7 +725,8 @@ class CircuitDiscovery:
     def update_co_occurrence(self, component1, component2, feature_tuple):
         if component1 != component2:
             self.co_occurrence_dict[component1][component2].append(feature_tuple)
-            self.co_occurrence_dict[component2][component1].append(feature_tuple)
+            feature_tuple_reversed = (feature_tuple[1], feature_tuple[0])
+            self.co_occurrence_dict[component2][component1].append(feature_tuple_reversed)
 
 
 

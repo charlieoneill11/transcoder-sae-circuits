@@ -33,8 +33,42 @@ class CircuitPrediction:
         self.mlp_freqs = mlp_freqs
         self.features_for_heads = features_for_heads
         self.features_for_mlps = features_for_mlps
-        self.co_occurrence_dict = self.clean_co_occurrence_dict(co_occurrence_dict)
+        self.co_occurrence_dict = self.symmetric_co_occurrence_dict(self.clean_co_occurrence_dict(co_occurrence_dict))
 
+    def clean_co_occurrence_dict(self, co_occurrence_dict):
+        cleaned_dict = {}
+
+        for component, co_occurrences in co_occurrence_dict.items():
+            cleaned_sub_dict = {}
+
+            for other_component, feature_tuples in co_occurrences.items():
+                filtered_tuples = [t for t in feature_tuples if -1 not in t]
+
+                if filtered_tuples:  # only add if there are remaining tuples
+                    cleaned_sub_dict[other_component] = filtered_tuples
+
+            if cleaned_sub_dict: 
+                cleaned_dict[component] = cleaned_sub_dict
+
+        return cleaned_dict
+    
+    def symmetric_co_occurrence_dict(self, co_occurrence_dict):
+        symmetric_dict = {}
+
+        for component, co_occurrences in co_occurrence_dict.items():
+            for other_component, feature_tuples in co_occurrences.items():
+                set_key = (component, other_component)
+
+                reversed_feature_tuples = [(t[1], t[0]) for t in feature_tuples]
+
+                if other_component in co_occurrence_dict and component in co_occurrence_dict[other_component]:
+                    assert co_occurrence_dict[other_component][component] == reversed_feature_tuples, "Symmetric lists do not match!"
+
+                if set_key not in symmetric_dict and (set_key[1], set_key[0]) not in symmetric_dict:
+                    symmetric_dict[set_key] = feature_tuples
+
+        return symmetric_dict
+    
     def display_co_occurrences(self):
         for layer, data in self.co_occurrence_dict.items():
             print(f"Layer {layer}:")
@@ -48,26 +82,6 @@ class CircuitPrediction:
             # Display mlps
             mlp_info = data['mlps']
             print(f"  MLP: Count = {mlp_info['count']}, Features = {mlp_info['features']}")
-
-    def clean_co_occurrence_dict(self, co_occurrence_dict):
-        # Create a new dictionary to hold the cleaned data
-        cleaned_dict = {}
-
-        for component, co_occurrences in co_occurrence_dict.items():
-            # Create a new sub-dictionary for the current component
-            cleaned_sub_dict = {}
-
-            for other_component, feature_tuples in co_occurrences.items():
-                # Filter out tuples containing -1
-                filtered_tuples = [t for t in feature_tuples if -1 not in t]
-
-                if filtered_tuples:  # Only add if there are remaining tuples
-                    cleaned_sub_dict[other_component] = filtered_tuples
-
-            if cleaned_sub_dict:  # Only add if there are remaining entries
-                cleaned_dict[component] = cleaned_sub_dict
-
-        return cleaned_dict
 
     def create_circuit_hypergraph(self):
         circuit_hypergraph = {label: {"freq": 0, "features": []} for label in self.component_labels}
