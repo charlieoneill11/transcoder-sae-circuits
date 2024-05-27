@@ -14,16 +14,32 @@ from discovery_strategies import (
     create_simple_greedy_strategy,
     create_top_contributor_strategy,
 )
+from text_utils import dd
 
 # %%
 torch.set_grad_enabled(False)
 
+# %%
+thsi_is_a_string = """
+    I find that the 
+    best time of 
+
+    day to  do stuff
+    is the afternoon
+"""
+
+print(thsi_is_a_string)
+print(dd(thsi_is_a_string))
+
+
 
 # %%
 feature = 16513
+# feature = 7861
 # feature = 16401
-layer = 8
-# feature = 15647
+# layer = 8
+layer = 9
+feature = 15647
 # num_examples = 1000
 num_examples = 5_000
 
@@ -37,7 +53,19 @@ analyze = MaxActAnalysis("attn", layer, feature, num_sequences=num_examples, bat
 analyze.show_top_active_examples(num_examples=5)
 
 # %%
-mini_examples = analyze.get_context_referenced_prompts_for_range(0, 10)
+e, r, p = analyze.get_feature_auto_interp(0, 20)
+
+
+# %%
+mini_examples = analyze.get_context_referenced_prompts_for_range(0, 20)
+
+# %%
+mini_examples[0]
+
+# %%
+print(p)
+
+
 
 
 # %%
@@ -45,7 +73,21 @@ p = main_aug_interp_prompt(mini_examples)
 
 print(p)
 # %%
-gen_openai_completion(p)
+c = gen_openai_completion(p)
+
+# %%
+import re
+
+pattern = r'\[EXPLANATION\](.*?)\[/EXPLANATION\]'
+
+# Use re.search to find the first match
+dd = re.search(pattern, c)
+
+# %%
+c.split("[EXPLANATION]\n")[1].split("\n[/EXPLANATION]")[0].replace('neuron', 'feature')
+
+
+
 
 # %%
 
@@ -78,6 +120,10 @@ analyze.show_example(i)
 cd = analyze.get_circuit_discovery_for_max_activating_example(i)
 
 cd.print_attn_heads_and_mlps_in_graph()
+
+# %%
+analyze.get_top_k_tokens()
+
 
 # %%
 i = 30

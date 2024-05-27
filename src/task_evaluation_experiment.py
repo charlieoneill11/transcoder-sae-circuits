@@ -56,7 +56,7 @@ def component_filter(component: str):
 
 pass_based = True
 
-passes = 5
+passes = 1
 node_contributors = 1
 first_pass_minimal = True
 
@@ -94,8 +94,29 @@ def strategy(cd: CircuitDiscovery):
 
 task_eval = TaskEvaluation(prompts=dataset_prompts, circuit_discovery_strategy=strategy, allowed_components_filter=component_filter)
 
+# %%
+cd = CircuitDiscovery(
+    "Two of the best players of all time are Federer and Nadal.  There are very few players that have so dominated the game of tennis as these two.  Federer is known for his elegant and \"effortless\" style, while",
+    seq_index=-1,
+    allowed_components_filter=component_filter
+)
+cd.set_root_to_z_feature(8, -1, 16513)
+task_eval.circuit_discovery_strategy(cd)
+
+# %%
+cd.visualize_graph()
+
+# %%
+p, ap = cd.get_context_referenced_prompt(context_lr=("{{", "}}"))
+
+
+
+
 
 # a = task_eval.get_attn_head_freqs_over_dataset(N=N, return_freqs=True)
+# %%
+ap
+
 
 # %%
 ground = task_eval.get_faithfulness_curve_over_data(N=20, attn_head_freq_n=10, faithfulness_intervals=30, rand=False, ioi_ground=True)
@@ -151,6 +172,17 @@ IOI_GROUND_TRUTH_HEADS.sum()
 # %%
 cd = task_eval.get_circuit_discovery_for_prompt(20)
 cd.print_attn_heads_and_mlps_in_graph()
+
+# %%
+cd.set_root_to_z_feature(8, -1, 16513)
+
+# %%
+cd.reset_graph()
+task_eval.circuit_discovery_strategy(cd)
+
+
+
+
 
 # %%
 cd.visualize_graph()

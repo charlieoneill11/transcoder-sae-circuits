@@ -829,9 +829,9 @@ class CircuitDiscovery:
 
         return final
 
-    
     def get_context_referenced_prompt(
         self,
+        pos=None,
         token_lr=("<<", ">>"),
         context_lr=("[[", "]]"),
         merge_nearby_context=False,
@@ -839,7 +839,9 @@ class CircuitDiscovery:
         tl, tr = token_lr
         cl, cr = context_lr
 
-        pos = self.seq_index
+        if pos is None:
+            pos = self.seq_index
+
         context_token_pos = self.get_token_pos_referenced_by_graph(no_bos=True)
 
         str_tokens: List[str] = self.model.to_str_tokens(self.tokens)  # type: ignore
