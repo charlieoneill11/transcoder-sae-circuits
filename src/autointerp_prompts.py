@@ -9,7 +9,7 @@ You are a meticulous AI researcher conducting an important investigation into a 
 
 You will be given a list of text examples on which the neuron activates. The specific tokens which cause the neuron to activate will appear with non-zero scores next to them. If a sequence of consecutive tokens all cause the neuron to activate, each token in the sequence will have a non-zero score.
 
-Step 1: For each text example in turn, note which tokens (i.e., words, fragments of words, or symbols) caused the neuron to activate. Then note which tokens came before the activating tokens. 
+Step 1: For each text example in turn, note which tokens (i.e., words, fragments of words, or symbols) caused the neuron to activate __highly__ (usually above 1.0 score). Then note which token came immediately before the activating token, for each activating token. 
 Step 2: Look for patterns in the tokens you noted down in Step 1.
 Step 3: Write down several general shared features of the text examples.
 
@@ -28,6 +28,41 @@ Guidelines:
 
 Here are several example explanations."""
 
+EXAMPLE_I = f"""
+Example 1: | R (0.00) | alph (0.00) |  and (0.00) |  Kathy (0.00) |  rightly (2.02) |  state (0.00) | , (0.00) |  that (0.00) |  had (0.00) |
+Example 2: | Much (0.00) |  love (0.00) |  from (0.00) |  the (0.00) |  Cher (0.00) | ubs (0.00) | ! (0.00) | \n (0.00) | \n (0.00) | - (0.00) | Jason (0.00) |  and (0.24) |  Jordan (0.00) | ! (1.97) | NEW (0.00) | UPDATE (0.00) |
+Example 3: |  and (0.00) |  Peggy (0.00) |  hold (1.94) |  Dodd (0.00) |  hostage (0.24) |  in (0.00) |  a (0.00) |  hunting (0.00) |  cabin (0.00) |  for (0.00) |  two (0.00) |  days (0.00) | , (0.00) |  and (0.00) |  in (0.00) |  the (0.00) |  end (0.00) |
+
+Top_logits: ["wcs", "cffffcc", " Schwar", "ce", "WAR", "osta", "lihood", "leans", "oren"]
+"""
+
+RESPONSE_I = f""" 
+(Part 1)
+Step 1.
+ACTIVATING TOKENS: "rightly", "!", "hold", "hostage".
+PREVIOUS TOKENS: "Kathy", "Cher", "Peggy", "Dodd".
+NEXT TOKENS: "state", "NEW", "in"
+
+Step 2.
+The activating tokens don't appear to have a common pattern.
+The previous tokens are all names.
+The next tokens don't appear to have a common pattern.
+
+Step 3.
+- The activating tokens are mostly verbs.
+- The previous tokens are all names.
+- The text examples contain a mix of names and verbs.
+
+(Part 2)
+Step 4.
+SIMILAR TOKENS: None.
+The top logits list contains mostly unrelated words.
+
+Step 5.
+[EXPLANATION]: The neuron activates on tokens immediately following names.
+
+"""
+
 EXAMPLE_1 = f"""
 Example 1: | and (0.00) | he (0.00) | was (0.00) | over (1.20) | the (1.00) | moon (1.50) | to (0.00) | find (0.00) |
 Example 2: | we'll (0.00) | be (0.00) | laughing (0.00) | till (0.80) | the (0.60) | cows (1.00) | come (1.20) | home (1.50) | ! (0.00) | Pro (0.00) |
@@ -41,6 +76,7 @@ RESPONSE_1 = f"""
 Step 1.
 ACTIVATING TOKENS: "over the moon", "till the cows come home", "than meets the eye".
 PREVIOUS TOKENS: "was", "laughing", "more".
+NEXT TOKENS: "to find", "!", "!I'd".
 
 Step 2.
 The activating tokens are all parts of common idioms.
@@ -147,4 +183,4 @@ def get_opening_prompt(examples, top_logits):
     examples_str = '\n'.join(examples)
     top_logits_str = ', '.join([f'"{logit}"' for logit in top_logits])
     opening_prompt = AGENT_START.format(examples=examples_str, top_logits=top_logits_str)
-    return f"{SYSTEM_PROMPT}\n{EXAMPLE_1}\n{RESPONSE_1}\n{EXAMPLE_2}\n{RESPONSE_2}\n{EXAMPLE_3}\n{RESPONSE_3}\n{opening_prompt}"
+    return f"{SYSTEM_PROMPT}\n{EXAMPLE_I}\n{RESPONSE_I}\n{EXAMPLE_1}\n{RESPONSE_1}\n{EXAMPLE_2}\n{RESPONSE_2}\n{EXAMPLE_3}\n{RESPONSE_3}\n{opening_prompt}"

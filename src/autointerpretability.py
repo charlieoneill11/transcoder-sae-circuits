@@ -472,7 +472,8 @@ def get_top_k_activating_examples_sum(feature_scores, tokens, model, feature_ind
 #     top_k_tokens = [model.to_string(x) for x in top_k_indices]
 #     return top_k_tokens, top_k_logits
 
-def get_top_logits(model, encoder, features, act_strength=4.0, dict_size=24576):
+def get_top_logits(model, encoder, features, act_strength=4.0):
+    dict_size = encoder.W_dec.shape[0]
     hidden_acts = torch.zeros(dict_size, device='cpu')
     if isinstance(features, list):
         for feature in features:
@@ -488,15 +489,15 @@ def get_top_logits(model, encoder, features, act_strength=4.0, dict_size=24576):
     )
     return logits
 
-def get_combined_logits(model, encoder_feature_pairs, act_strength=4.0, dict_size=24576):
+def get_combined_logits(model, encoder_feature_pairs, act_strength=4.0):
     combined_logits = torch.zeros((1, model.W_U.size(1)), device='cpu')
     for encoder, features in encoder_feature_pairs:
-        logits = get_top_logits(model, encoder, features, act_strength, dict_size)
+        logits = get_top_logits(model, encoder, features, act_strength)
         combined_logits += logits
     return combined_logits
 
-def get_top_k_tokens(model, encoder_feature_pairs, dict_size=24576, act_strength=4.0, k=10):
-    combined_logits = get_combined_logits(model, encoder_feature_pairs, act_strength, dict_size)
+def get_top_k_tokens(model, encoder_feature_pairs, act_strength=4.0, k=10):
+    combined_logits = get_combined_logits(model, encoder_feature_pairs, act_strength)
     top_k = torch.topk(combined_logits, k)
     top_k_indices = top_k.indices.squeeze().tolist()
     top_k_logits = top_k.values.squeeze().tolist()
@@ -511,7 +512,6 @@ def pretty_print_tokens_logits(tokens, logits):
         table.append([token_str, logit_str])
     
     print(tabulate(table, headers="firstrow", tablefmt="fancy_grid"))
-
 
 def get_response(llm_client, examples_clean_text, top_tokens):
     opening_prompt = get_opening_prompt(examples_clean_text, top_tokens)

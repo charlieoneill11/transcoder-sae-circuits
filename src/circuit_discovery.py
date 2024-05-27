@@ -8,6 +8,7 @@ from circuit_lens import (
     ComponentLens,
     CircuitComponent,
     ComponentLensWithValue,
+    map_feature_to_activation_index
 )
 from graphviz import Digraph
 from functools import partial

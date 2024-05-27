@@ -44,6 +44,111 @@ NUM_MLP_AUXILARY_FEATURES = 2
 NUM_AUXILARY_FEATURES = NUM_ATTN_AUXILARY_FEATURES + NUM_MLP_AUXILARY_FEATURES
 
 
+def map_activation_index_to_feature(index, keys):
+    current_index = 0
+    
+    # Embed and Pos Embed
+    if index == current_index:
+        return CircuitComponent.EMBED, 0
+    current_index += 1
+    if index == current_index:
+        return CircuitComponent.POS_EMBED, 0
+    current_index += 1
+    
+    # Iterate through each layer
+    for layer, key in enumerate(keys):
+        # Bias O
+        if index == current_index:
+            return CircuitComponent.BIAS_O, layer
+        current_index += 1
+        
+        # Z SAE Error
+        if index == current_index:
+            return CircuitComponent.Z_SAE_ERROR, layer
+        current_index += 1
+        
+        # Z SAE Bias
+        if index == current_index:
+            return CircuitComponent.Z_SAE_BIAS, layer
+        current_index += 1
+        
+        # Attention Features
+        if index < current_index + key["attn"]:
+            return CircuitComponent.Z_FEATURE, layer, index - current_index
+        current_index += key["attn"]
+        
+        # Transcoder Error
+        if index == current_index:
+            return CircuitComponent.TRANSCODER_ERROR, layer
+        current_index += 1
+        
+        # Transcoder Bias
+        if index == current_index:
+            return CircuitComponent.TRANSCODER_BIAS, layer
+        current_index += 1
+        
+        # MLP Features
+        if index < current_index + key["mlp"]:
+            return CircuitComponent.MLP_FEATURE, layer, index - current_index
+        current_index += key["mlp"]
+    
+    raise ValueError("Index out of range")
+
+
+def map_feature_to_activation_index(feature, keys):
+    component, layer, feature_index = feature
+    
+    current_index = 0
+    
+    # Embed and Pos Embed
+    if component == CircuitComponent.EMBED:
+        return current_index
+    current_index += 1
+    if component == CircuitComponent.POS_EMBED:
+        return current_index
+    current_index += 1
+    
+    # Iterate through each layer
+    for l, key in enumerate(keys):
+        if l == layer:
+            # Bias O
+            if component == CircuitComponent.BIAS_O:
+                return current_index
+            current_index += 1
+            
+            # Z SAE Error
+            if component == CircuitComponent.Z_SAE_ERROR:
+                return current_index
+            current_index += 1
+            
+            # Z SAE Bias
+            if component == CircuitComponent.Z_SAE_BIAS:
+                return current_index
+            current_index += 1
+            
+            # Attention Features
+            if component == CircuitComponent.Z_FEATURE:
+                return current_index + feature_index
+            current_index += key["attn"]
+            
+            # Transcoder Error
+            if component == CircuitComponent.TRANSCODER_ERROR:
+                return current_index
+            current_index += 1
+            
+            # Transcoder Bias
+            if component == CircuitComponent.TRANSCODER_BIAS:
+                return current_index
+            current_index += 1
+            
+            # MLP Features
+            if component == CircuitComponent.MLP_FEATURE:
+                return current_index + feature_index
+            current_index += key["mlp"]
+    
+    raise ValueError("Feature not found in keys")
+
+
 @dataclass
 class ActiveFeatures:
     vectors: Float[Tensor, "comp d_model"]
