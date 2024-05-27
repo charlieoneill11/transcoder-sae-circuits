@@ -365,7 +365,7 @@ class ActiveFeatures:
                         component=component,
                         run_data={
                             "layer": layer,
-                            "seq_index": seq_index,
+                            "seq_index": int(seq_index),
                             "feature": feature_i,
                         },
                     ),
@@ -437,8 +437,6 @@ ComponentLensWithValue = Tuple["ComponentLens", float]
 class ComponentLens:
     circuit_lens: "CircuitLens"
     component: str
-    circuit_lens: "CircuitLens"
-    component: str
     run_data: Dict[str, Any]
 
     @property
@@ -446,26 +444,68 @@ class ComponentLens:
         if self.component == CircuitComponent.UNEMBED:
             return (
                 self.component,
-                self.run_data["seq_index"],
-                self.run_data["token_id"],
+                int(self.run_data["seq_index"]),
+                int(self.run_data["token_id"]),
             )
         elif self.component == CircuitComponent.UNEMBED_AT_TOKEN:
             return (self.component, self.run_data["seq_index"])
         elif self.component == CircuitComponent.ATTN_HEAD:
             return (
                 self.component,
-                self.run_data["layer"],
-                self.run_data["head"],
-                self.run_data["source_index"],
-                self.run_data["destination_index"],
-                self.run_data["feature"],
+                int(self.run_data["layer"]),
+                int(self.run_data["head"]),
+                int(self.run_data["source_index"]),
+                int(self.run_data["destination_index"]),
+                int(self.run_data["feature"]),
             )
         else:
             return (
                 self.component,
-                self.run_data["layer"],
-                self.run_data["seq_index"],
-                self.run_data["feature"],
+                int(self.run_data["layer"]),
+                int(self.run_data["seq_index"]),
+                int(self.run_data["feature"]),
+            )
+
+    @classmethod
+    def init_from_tuple_id(cls, tuple_id, circuit_lens):
+        component = tuple_id[0]
+
+        if component == CircuitComponent.UNEMBED:
+            return cls(
+                circuit_lens=circuit_lens,
+                component=component,
+                run_data={
+                    "seq_index": tuple_id[1],
+                    "token_id": tuple_id[2],
+                },
+            )
+        elif component == CircuitComponent.UNEMBED_AT_TOKEN:
+            return cls(
+                circuit_lens=circuit_lens,
+                component=component,
+                run_data={"seq_index": tuple_id[1]},
+            )
+        elif component == CircuitComponent.ATTN_HEAD:
+            return cls(
+                circuit_lens=circuit_lens,
+                component=component,
+                run_data={
+                    "layer": tuple_id[1],
+                    "head": tuple_id[2],
+                    "source_index": tuple_id[3],
+                    "destination_index": tuple_id[4],
+                    "feature": tuple_id[5],
+                },
+            )
+        else:
+            return cls(
+                circuit_lens=circuit_lens,
+                component=component,
+                run_data={
+                    "layer": tuple_id[1],
+                    "seq_index": tuple_id[2],
+                    "feature": tuple_id[3],
+                },
             )
 
     @classmethod
@@ -751,6 +791,9 @@ class CircuitLens:
 
             component_keys.append({"mlp": mlp_winner_count, "attn": z_winner_count})
 
+        values = [v if v.dim() > 0 else v.unsqueeze(0) for v in values]
+        features = [f if f.dim() > 0 else f.unsqueeze(0) for f in features]
+
         component_vectors = torch.cat(vectors, dim=0)
         component_values = torch.cat(values, dim=0)
         component_features = torch.cat(features, dim=0)
@@ -958,9 +1001,9 @@ class CircuitLens:
                         run_data={
                             "layer": layer,
                             "head": head,
-                            "source_index": source,
+                            "source_index": int(source),
                             "feature": feature,
-                            "destination_index": seq_index,
+                            "destination_index": int(seq_index),
                         },
                     ),
                     value,

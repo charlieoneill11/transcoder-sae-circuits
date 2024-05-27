@@ -156,12 +156,12 @@ cd.print_attn_heads_and_mlps_in_graph()
 cd.visualize_graph()
 
 # %%
-f = task_eval.get_features_at_heads_over_dataset(N=30)
+# f = task_eval.get_features_at_heads_over_dataset(N=30)
 
 # %%
 N = 300
 
-counts = task_eval.get_feature_count_for_heads_over_dataset(N=N)
+counts = task_eval.get_unique_features_for_heads_over_dataset(N=N)
 # %%
 layer = 9
 head = 9
