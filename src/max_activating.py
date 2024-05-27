@@ -123,7 +123,7 @@ def main(total_tokens: int = 1_000_000, batch_size: int = 64, seq_len: int = 128
 
 
 if __name__ == "__main__":
-    total_tokens = 10_000
-    batch_size = 4
+    total_tokens = 50_000
+    batch_size = 16
     seq_len = 128
     main(total_tokens, batch_size, seq_len)

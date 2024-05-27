@@ -395,22 +395,9 @@ def get_feature_scores(
                 cur_scores = hidden_acts[:, feature_indices]
                 del hidden_acts
 
-<<<<<<< HEAD
         scores.append(
             to_numpy(
                 einops.rearrange(cur_scores, "(b pos) n -> b n pos", pos=tokens_arr.shape[1])
-=======
-            if ignore_endoftext:
-                cur_scores[
-                    tokens_arr[i : i + batch_size].reshape(-1) == endoftext_token
-                ] = -torch.inf
-
-        scores.append(
-            to_numpy(
-                einops.rearrange(
-                    cur_scores, "(b pos) n -> b n pos", pos=tokens_arr.shape[1]
-                )
->>>>>>> origin/danny/feature-dash
             ).astype(np.float16)
         )
 
@@ -498,7 +485,6 @@ def highlight_scores_in_html(
     return head + tokens_html, clean_text
 
 
-<<<<<<< HEAD
 def display_top_k_activating_examples(model, feature_scores, tokens, k=5, show_score=True, display_html=True):
     top_k_tokens_str, top_k_scores_per_seq, top_k_seq_indices = get_top_k_activating_examples(feature_scores, tokens, model, k=k)
     examples_html = []
@@ -507,24 +493,6 @@ def display_top_k_activating_examples(model, feature_scores, tokens, k=5, show_s
         example_html, clean_text = highlight_scores_in_html(top_k_tokens_str[i], top_k_scores_per_seq[i], top_k_seq_indices[i], show_score=show_score)
         if display_html:
             display(HTML(example_html))
-=======
-def display_top_k_activating_examples(
-    model, feature_scores, tokens, k=5, show_score=True
-):
-    top_k_tokens_str, top_k_scores_per_seq, top_k_seq_indices = (
-        get_top_k_activating_examples(feature_scores, tokens, model, k=k)
-    )
-    examples_html = []
-    examples_clean_text = []
-    for i in range(k):
-        example_html, clean_text = highlight_scores_in_html(
-            top_k_tokens_str[i],
-            top_k_scores_per_seq[i],
-            top_k_seq_indices[i],
-            show_score=show_score,
-        )
-        display(HTML(example_html))
->>>>>>> origin/danny/feature-dash
         examples_html.append(example_html)
         examples_clean_text.append(clean_text)
     return examples_html, examples_clean_text
@@ -636,12 +604,7 @@ def get_response(llm_client, examples_clean_text, top_tokens):
     )
     return f"{response.choices[0].message.content}"
 
-<<<<<<< HEAD
 def get_circuit_prediction(task: str = 'ioi', N: int = 50):
-=======
-
-def get_circuit_prediction(task: str = "ioi", N: int = 50):
->>>>>>> origin/danny/feature-dash
     torch.set_grad_enabled(False)
     dataset_prompts = gen_templated_prompts(template_idex=1, N=500)
 
@@ -686,7 +649,6 @@ def get_circuit_prediction(task: str = "ioi", N: int = 50):
             for _ in range(num_greedy_passes):
                 cd.greedily_add_top_contributors(k=k, reciever_threshold=thres)
 
-<<<<<<< HEAD
     task_eval = TaskEvaluation(prompts=dataset_prompts, circuit_discovery_strategy=strategy, allowed_components_filter=component_filter)
 
     # features_for_heads = task_eval.get_features_at_heads_over_dataset(N=N, use_set=False)
@@ -754,23 +716,3 @@ def get_circuit_prediction(task: str = "ioi", N: int = 50):
 #     cp = CircuitPrediction(attn_freqs, mlp_freqs, features_for_heads, features_for_mlps)
 #     return cp
     
-=======
-    task_eval = TaskEvaluation(
-        prompts=dataset_prompts,
-        circuit_discovery_strategy=strategy,
-        allowed_components_filter=component_filter,
-    )
-    # cd = task_eval.get_circuit_discovery_for_prompt(20)
-    features_for_heads = task_eval.get_features_at_heads_over_dataset(
-        N=N, use_set=False
-    )
-    features_for_mlps = task_eval.get_features_at_mlps_over_dataset(N=N, use_set=False)
-    mlp_freqs = task_eval.get_mlp_freqs_over_dataset(
-        N=N, return_freqs=True, visualize=False
-    )
-    attn_freqs = task_eval.get_attn_head_freqs_over_dataset(
-        N=N, subtract_counter_factuals=False, return_freqs=True, visualize=False
-    )
-    cp = CircuitPrediction(attn_freqs, mlp_freqs, features_for_heads, features_for_mlps)
-    return cp
->>>>>>> origin/danny/feature-dash

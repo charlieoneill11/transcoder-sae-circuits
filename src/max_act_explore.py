@@ -48,6 +48,11 @@ print(p)
 gen_openai_completion(p)
 
 # %%
+from openai_utils import get_response
+
+get_response(p)
+
+# %%
 
 
 i = 70
@@ -122,3 +127,5 @@ cd.component_lens_at_loc([0, 'v'])
 
 # %%
 cd.get_min_max_pos_in_graph()
+
+# %%

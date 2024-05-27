@@ -1962,44 +1962,20 @@ class CircuitDiscovery:
             if isinstance(node, CircuitDiscoveryRegularNode):
                 top_contribs = node.get_top_unused_contributors()
                 for contributor, value in top_contribs[:contributors_per_node]:
-<<<<<<< HEAD
                     contributor_node = node.add_contributor_edge(contributor, weight=value)
                     self.transformer_model.edge_tracker.add_edge(node.tuple_id, contributor_node.tuple_id, weight=value)
-=======
-                    print(
-                        f"Node: {node.tuple_id}, Contributor: {contributor}, Value: {value}"
-                    )
-                    contributor_node = node.add_contributor_edge(contributor, value)
-                    self.transformer_model.edge_tracker.add_edge(
-                        node.tuple_id, contributor_node.tuple_id, weight=value
-                    )
->>>>>>> origin/danny/feature-dash
                     queue.append(contributor_node)
 
             elif isinstance(node, CircuitDiscoveryHeadNode):
                 for head_type in ["q", "k", "v"]:
                     top_contribs = node.get_top_unused_contributors(head_type)
                     for contributor, value in top_contribs[:contributors_per_node]:
-<<<<<<< HEAD
                         contributor_node = node.add_contributor_edge(head_type, contributor, weight=value)
                         self.transformer_model.edge_tracker.add_edge(node.tuple_id, contributor_node.tuple_id, weight=value)
                         queue.append(contributor_node)
 
 
 
-=======
-                        print(
-                            f"Node: {node.tuple_id}, Head Type: {head_type}, Contributor: {contributor}, Value: {value}"
-                        )
-                        contributor_node = node.add_contributor_edge(
-                            head_type, contributor, value
-                        )
-                        self.transformer_model.edge_tracker.add_edge(
-                            node.tuple_id, contributor_node.tuple_id, weight=value
-                        )
-                        queue.append(contributor_node)
-
->>>>>>> origin/danny/feature-dash
     def recursive_explore_all_nodes(self, root_node, contributors_per_node=1):
         """
         Recursively explore all nodes and add edges for each node.
@@ -2030,7 +2006,6 @@ class CircuitDiscovery:
         """
         self.reset_graph()
         self.recursive_explore_all_nodes(self.root_node, contributors_per_node)
-<<<<<<< HEAD
         #self.collect_co_occurrences()
 
 
@@ -2038,5 +2013,3 @@ class CircuitDiscovery:
 
 
 
-=======
->>>>>>> origin/danny/feature-dash
