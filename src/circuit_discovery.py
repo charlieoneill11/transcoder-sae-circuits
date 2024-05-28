@@ -429,6 +429,10 @@ class CircuitDiscoveryNode:
         return self.circuit_discovery.transformer_model
 
     @property
+    def feature(self):
+        return self.component_lens.run_data.get("feature", -1)
+
+    @property
     def k(self):
         return self.circuit_discovery.k
 
@@ -715,10 +719,15 @@ class CircuitDiscovery:
         self.transformer_model = TransformerAnalysisModel(self)
 
         if token:
+            if isinstance(token, str):
+                token = int(self.model.to_single_token(token))
+
+            self.token = token
             self.root_node = self.transformer_model.get_discovery_node_at_locator(
                 ComponentLens.create_unembed_lens(self.lens, self.seq_index, token),
             )
         else:
+            self.token = None
             self.root_node = self.transformer_model.get_discovery_node_at_locator(
                 ComponentLens.create_unembed_at_token_lens(self.lens, self.seq_index),
             )

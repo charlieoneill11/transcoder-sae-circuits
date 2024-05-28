@@ -97,8 +97,10 @@ Step 1:
     )
 
 
-def extract_explanation(res: str, replace_neuron_with_feature=True):
-    base = res.split(f"[{explanation_delim}]")[1].split(f"[\\{explanation_delim}]")[0]
+def extract_explanation(
+    res: str, replace_neuron_with_feature=True, delim=explanation_delim
+):
+    base = res.split(f"[{explanation_delim}]")[1].split(f"[\\{delim}]")[0]
 
     if replace_neuron_with_feature:
         base = base.replace("neuron", "feature")
