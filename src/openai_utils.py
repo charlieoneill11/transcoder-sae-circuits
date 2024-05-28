@@ -30,6 +30,7 @@ def gen_openai_completion(prompt: str, model="gpt-4o", visualize_stream=True) ->
         res = client.chat.completions.create(
             model=model,
             messages=[{"role": "user", "content": prompt}],
+            max_tokens=100_000,
         )
 
         return str(res.choices[0].message.content)

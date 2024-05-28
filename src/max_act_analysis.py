@@ -107,6 +107,9 @@ class MaxActAnalysis:
 
         prompts = []
 
+        # This is sketchy, but we include this here to not have nested tranges
+        _ = self.active_examples
+
         for i in trange(start, end):
             p, ap = self.get_context_referenced_prompt(
                 i,
@@ -176,7 +179,6 @@ class MaxActAnalysis:
         context_lr=("[[", "]]"),
         merge_nearby_context=False,
     ):
-
         pos = self.get_active_example(i)[1]
 
         # tokens = open_web_text_tokens[seq][: pos + 1]
@@ -289,6 +291,8 @@ class MaxActAnalysis:
 
         scores = []
 
+        print("name", name_filter)
+
         for i in trange(0, tokens.shape[0], self.batch_size):
             with torch.no_grad():
                 curr_tokens = tokens[i : i + self.batch_size]
@@ -300,7 +304,11 @@ class MaxActAnalysis:
                 )
                 acts = cache[name_filter]
                 # acts_flat = acts.reshape(-1, encoder.W_enc.shape[0])
-                acts_flat = einops.rearrange(acts, "b pos n d -> (b pos) (n d)")
+
+                if self.feature_type == "attn":
+                    acts_flat = einops.rearrange(acts, "b pos n d -> (b pos) (n d)")
+                else:
+                    acts_flat = einops.rearrange(acts, "b pos d -> (b pos) d")
 
                 hidden_acts = self.encoder.encode(acts_flat)
                 curr_scores = hidden_acts[:, self.feature]

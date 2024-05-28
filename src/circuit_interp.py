@@ -1,5 +1,6 @@
 import torch
 
+from dataclasses import dataclass
 from circuit_discovery import (
     CircuitDiscovery,
     CircuitDiscoveryHeadNode,
@@ -10,7 +11,7 @@ from circuit_lens import get_model_encoders, CircuitComponent
 from jinja2 import Template
 from text_utils import dedent
 from max_act_analysis import MaxActAnalysis
-from typing import Dict, Union, Tuple
+from typing import Dict, Union, Tuple, List
 from openai_utils import gen_openai_completion
 from circuit_interp_prompts import attn_head_max_act_prompt
 from aug_interp_prompts import extract_explanation
@@ -18,6 +19,12 @@ from aug_interp_prompts import extract_explanation
 
 def tm(s: str) -> Template:
     return Template(dedent(s))
+
+
+@dataclass
+class LabeledFeature:
+    node: CircuitDiscoveryNode
+    explanation: str
 
 
 class CircuitInterp:
@@ -39,6 +46,81 @@ class CircuitInterp:
     @property
     def component_filter(self):
         return self.circuit_discovery.allowed_components_filter
+
+    @property
+    def model(self):
+        return self.circuit_discovery.model
+
+    @property
+    def final_token(self) -> str:
+        return self.model.tokenizer.decode(self.circuit_discovery.token)
+
+    def interpret_heads_in_circuit(self, layer_threshold=-1, visualize=False):
+        queue: List[LabeledFeature] = []
+        visited_ids = []
+
+        queue.append(
+            LabeledFeature(
+                node=self.circuit_discovery.root_node,
+                explanation=f"This neuron causes the model to strongly predict '{self.final_token}' as the next token.",
+            )
+        )
+
+        explanation_dict = {}
+
+        while queue:
+            next_task = queue.pop(0)
+
+            node = next_task.node
+
+            while node is not None and isinstance(node, CircuitDiscoveryRegularNode):
+                node = node.sorted_contributors_in_graph[0]
+
+                if node.component not in [
+                    CircuitComponent.Z_FEATURE,
+                    CircuitComponent.MLP_FEATURE,
+                    CircuitComponent.ATTN_HEAD,
+                ]:
+                    node = None
+                    break
+
+            if not isinstance(node, CircuitDiscoveryHeadNode):
+                continue
+
+            if node.tuple_id in visited_ids or node.layer <= layer_threshold:
+                continue
+
+            (
+                head_label,
+                head_explanation,
+                query_explanation,
+                key_explanation,
+                value_explanation,
+                _,
+            ) = self.get_attn_head_interp(
+                node, next_task.explanation, visualize=visualize
+            )
+
+            explanation_dict[node.tuple_id] = (head_label, head_explanation)
+
+            queue.extend(
+                [
+                    LabeledFeature(
+                        node=node.sorted_contributors_in_graph("q")[0],
+                        explanation=query_explanation,
+                    ),
+                    LabeledFeature(
+                        node=node.sorted_contributors_in_graph("k")[0],
+                        explanation=key_explanation,
+                    ),
+                    LabeledFeature(
+                        node=node.sorted_contributors_in_graph("v")[0],
+                        explanation=value_explanation,
+                    ),
+                ]
+            )
+
+        return explanation_dict
 
     def get_attn_head_interp(
         self,
@@ -105,6 +187,7 @@ class CircuitInterp:
         source_token = self.circuit_discovery.str_tokens[node.source]
         dest_token = self.circuit_discovery.str_tokens[node.dest]
 
+        sequence = "".join(self.circuit_discovery.str_tokens) + self.final_token
         source_dest_annotated_seq = ""
 
         for i, tok in enumerate(self.circuit_discovery.str_tokens):
@@ -114,6 +197,8 @@ class CircuitInterp:
                 source_dest_annotated_seq += f"{dl}{tok}{dr}"
             else:
                 source_dest_annotated_seq += tok
+
+        source_dest_annotated_seq += self.final_token
 
         head_label = f"Attention Head L{layer}H{head}"
 
@@ -132,6 +217,7 @@ class CircuitInterp:
                 "source_token": source_token,
                 "dest_token": dest_token,
                 "source_dest_annotated_seq": source_dest_annotated_seq,
+                "sequence": sequence,
                 "query_examples": child_max_acts[
                     "q"
                 ].get_context_referenced_prompts_for_range(
@@ -163,7 +249,18 @@ class CircuitInterp:
         value_explanation = extract_explanation(res, delim="VALUE_NEURON_EXPLANATION")
 
         head_explanation = extract_explanation(
-            res, delim="ATTENTION_HEAD_COMPUTATION_DESCRIPTION"
+            res,
+            delim="ATTENTION_HEAD_COMPUTATION_DESCRIPTION",
+            # delim="ATTENTION_HEAD_COMPUTATION_HYPOTHESIS",
         )
 
-        return head_explanation, query_explanation, key_explanation, value_explanation
+        head_label = extract_explanation(res, delim="ATTENTION_HEAD_LABEL")
+
+        return (
+            head_label,
+            head_explanation,
+            query_explanation,
+            key_explanation,
+            value_explanation,
+            prompt,
+        )
