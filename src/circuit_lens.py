@@ -968,7 +968,7 @@ class CircuitLens:
     ):
         seq_index = self.process_seq_index(seq_index)
 
-        error_vector = self.get_active_features(layer).get_z_error(layer)
+        error_vector = self.get_active_features(seq_index).get_z_error(layer)
         error_vector = einops.rearrange(
             error_vector, "(n_head d_head) -> n_head d_head", n_head=12
         )
