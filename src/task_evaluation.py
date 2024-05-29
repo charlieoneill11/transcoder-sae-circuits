@@ -14,6 +14,7 @@ from tqdm import trange
 from plotly_utils import *
 from functools import partial
 from data.ioi_dataset import IOI_GROUND_TRUTH_HEADS
+from data.greater_than_dataset import GT_GROUND_TRUTH_HEADS
 
 
 Z_FILTER = lambda x: x.endswith("z")
@@ -553,6 +554,7 @@ class TaskEvaluation:
         visualize=True,
         rand=False,
         ioi_ground=False,
+        task="ioi",
     ):
         answer_tokens = []
         for i in range(N):
@@ -583,7 +585,10 @@ class TaskEvaluation:
             return answer_logit_diff.mean()
 
         if ioi_ground or rand:
-            attn_freqs = IOI_GROUND_TRUTH_HEADS.float().to("cuda")
+            if task == 'ioi':
+                attn_freqs = IOI_GROUND_TRUTH_HEADS.float().to(self.device)
+            elif task == 'gt':
+                attn_freqs = GT_GROUND_TRUTH_HEADS.float().to(self.device)
             attn_freqs += torch.rand_like(attn_freqs) * 0.001
         else:
             attn_freqs = self.get_attn_head_freqs_over_dataset(
@@ -611,6 +616,7 @@ class TaskEvaluation:
             mean_acts = einops.repeat(
                 self.mean_cache[hook.name], "... -> B ...", B=acts.size(0)
             )
+            #mean_acts = torch.zeros_like(acts)
 
             return mean_acts
             # print("ablating!", hook.name)

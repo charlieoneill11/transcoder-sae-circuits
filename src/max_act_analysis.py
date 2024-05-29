@@ -7,7 +7,7 @@ from mlp_transcoder import SparseTranscoder
 from z_sae import ZSAE
 from transformer_lens import HookedTransformer
 from tqdm import trange
-from typing import List
+from typing import List, Optional, Tuple, Any
 from IPython.display import display
 from discovery_strategies import BASIC_FILTER, BASIC_STRATEGY
 from circuit_discovery import CircuitDiscovery
@@ -22,17 +22,22 @@ class MaxActAnalysis:
         feature_type: str,
         layer: int,
         feature: int,
-        num_sequences=None,
-        batch_size=128,
-        component_filter=BASIC_FILTER,
-        strategy=BASIC_STRATEGY,
+        num_sequences: Optional[int] = None,
+        batch_size: int = 128,
+        component_filter: Any = BASIC_FILTER,
+        strategy: Any = BASIC_STRATEGY,
+        token_dataset: Optional[torch.Tensor] = None,
+        model: Optional[HookedTransformer] = None,
+        z_saes: Optional[List[ZSAE]] = None,
+        transcoders: Optional[List[SparseTranscoder]] = None
     ):
         assert feature_type in ("attn", "mlp")
 
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.feature_type = feature_type
 
-        model, z_saes, transcoders = get_model_encoders(self.device)
+        if model is None or z_saes is None or transcoders is None:
+            model, z_saes, transcoders = get_model_encoders(self.device)
 
         self.model = model
         self.feature = feature
@@ -41,8 +46,13 @@ class MaxActAnalysis:
         self.component_filter = component_filter
         self.strategy = strategy
 
+        if token_dataset is None:
+            self.tokens = open_web_text_tokens
+        else:
+            self.tokens = token_dataset
+
         if num_sequences is None:
-            self.num_sequences = open_web_text_tokens.size(0)
+            self.num_sequences = self.tokens.size(0)
         else:
             self.num_sequences = num_sequences
 
@@ -71,7 +81,7 @@ class MaxActAnalysis:
 
         seq, pos, _ = self.get_active_example(example_i)
 
-        tokens = open_web_text_tokens[seq]
+        tokens = self.tokens[seq]
         prompt = self.model.tokenizer.decode(tokens[1:])
 
         cd = CircuitDiscovery(
@@ -92,12 +102,12 @@ class MaxActAnalysis:
 
     def get_context_referenced_prompts_for_range(
         self,
-        start,
-        end,
-        token_lr=("<<", ">>"),
-        context_lr=("[[", "]]"),
-        merge_nearby_context=False,
-    ):
+        start: int,
+        end: int,
+        token_lr: Tuple[str, str] = ("<<", ">>"),
+        context_lr: Tuple[str, str] = ("[[", "]]"),
+        merge_nearby_context: bool = False,
+    ) -> List[Tuple[str, str]]:
         prompts = []
 
         for i in trange(start, end):
@@ -114,17 +124,17 @@ class MaxActAnalysis:
 
     def get_context_referenced_prompt(
         self,
-        i,
-        token_lr=("<<", ">>"),
-        context_lr=("[[", "]]"),
-        merge_nearby_context=False,
-    ):
+        i: int,
+        token_lr: Tuple[str, str] = ("<<", ">>"),
+        context_lr: Tuple[str, str] = ("[[", "]]"),
+        merge_nearby_context: bool = False,
+    ) -> Tuple[str, str]:
         tl, tr = token_lr
         cl, cr = context_lr
 
         seq, pos, val = self.get_active_example(i)
 
-        tokens = open_web_text_tokens[seq][: pos + 1]
+        tokens = self.tokens[seq][: pos + 1]
         cd = self.get_circuit_discovery_for_max_activating_example(i)
 
         context_token_pos = cd.get_token_pos_referenced_by_graph(no_bos=True)
@@ -196,7 +206,7 @@ class MaxActAnalysis:
 
         return prompt, prompt_with_context
 
-    def get_active_example(self, i):
+    def get_active_example(self, i: int) -> Tuple[int, int, float]:
         seq_pos, vals, _ = self.active_examples
 
         seq, pos = seq_pos[i]
@@ -206,11 +216,11 @@ class MaxActAnalysis:
     @property
     def active_examples(
         self,
-    ):
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         if self._active_examples is not None:
             return self._active_examples
 
-        tokens = open_web_text_tokens[: self.num_sequences]
+        tokens = self.tokens[: self.num_sequences]
 
         if self.feature_type == "attn":
             name_filter = f"blocks.{self.layer}.attn.hook_z"
@@ -229,7 +239,6 @@ class MaxActAnalysis:
                     names_filter=name_filter,
                 )
                 acts = cache[name_filter]
-                # acts_flat = acts.reshape(-1, encoder.W_enc.shape[0])
                 acts_flat = einops.rearrange(acts, "b pos n d -> (b pos) (n d)")
 
                 hidden_acts = self.encoder.encode(acts_flat)
@@ -265,7 +274,7 @@ class MaxActAnalysis:
             seq, pos = seq_pos[i]
             val = vals[i]
 
-            str_tokens = self.model.to_str_tokens(open_web_text_tokens[seq])
+            str_tokens = self.model.to_str_tokens(self.tokens[seq])
 
             min_index = max(0, pos.item() - token_buffer)
             max_index = pos.item() + token_buffer
@@ -285,7 +294,7 @@ class MaxActAnalysis:
         seq, pos = seq_pos[example_i]
         val = vals[example_i]
 
-        str_tokens = self.model.to_str_tokens(open_web_text_tokens[seq])
+        str_tokens = self.model.to_str_tokens(self.tokens[seq])
 
         min_index = max(0, pos.item() - token_buffer)
         max_index = pos.item() + token_buffer

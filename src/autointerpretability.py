@@ -9,6 +9,7 @@ from sklearn import metrics
 from tqdm import trange, tqdm
 from z_sae import ZSAE
 from mlp_transcoder import SparseTranscoder
+import re
 
 # from openai import AzureOpenAI
 from transformer_lens.utils import to_numpy
@@ -27,6 +28,7 @@ from data.greater_than_dataset import (
 from circuit_discovery import CircuitDiscovery
 from plotly_utils import *
 from autointerp_prompts import get_opening_prompt
+from openai_utils import gen_openai_completion
 
 from termcolor import colored
 from tabulate import tabulate
@@ -429,6 +431,35 @@ def get_top_k_activating_examples(feature_scores, tokens, model, k=5):
     ]
     return top_k_tokens_str, top_k_scores_per_seq, top_k_seq_indices
 
+def convert_clean_text(clean_text):
+    # Split the clean text on the "|" separator
+    token_score_pairs = clean_text.split(" | ")
+
+    # Remove the first token
+    if token_score_pairs:
+        token_score_pairs = token_score_pairs[1:]
+
+    # Initialize an empty list to hold the converted tokens
+    converted_tokens = []
+
+    # Define regex to capture tokens with non-zero scores
+    non_zero_score_pattern = re.compile(r"^(.+?) \((\d+\.\d+)\)$")
+
+    for token_score in token_score_pairs:
+        match = non_zero_score_pattern.match(token_score)
+        if match:
+            token = match.group(1)
+            score = float(match.group(2))
+            if score > 0:
+                # Add delimiters around tokens with non-zero scores
+                token = f"{{{{tl}}}}{token}{{{{tr}}}}"
+        else:
+            token = token_score.split(' (')[0]  # Handle cases where score is zero or absent
+        converted_tokens.append(token)
+
+    # Join the converted tokens into a single string
+    converted_text = " ".join(converted_tokens)
+    return converted_text
 
 def highlight_scores_in_html(
     token_strs,
@@ -482,7 +513,7 @@ def highlight_scores_in_html(
         }
     </style>
     """
-    return head + tokens_html, clean_text
+    return head + tokens_html, convert_clean_text(clean_text)
 
 
 def display_top_k_activating_examples(model, feature_scores, tokens, k=5, show_score=True, display_html=True):
@@ -595,14 +626,10 @@ def pretty_print_tokens_logits(tokens, logits):
     
     print(tabulate(table, headers="firstrow", tablefmt="fancy_grid"))
 
-def get_response(llm_client, examples_clean_text, top_tokens):
+
+def get_interpretation(examples_clean_text, top_tokens):
     opening_prompt = get_opening_prompt(examples_clean_text, top_tokens)
-    messages = [{"role": "user", "content": opening_prompt}]
-    response = llm_client.chat.completions.create(
-        model="gpt4_large",
-        messages=messages,
-    )
-    return f"{response.choices[0].message.content}"
+    return gen_openai_completion(opening_prompt, visualize_stream=False)
 
 def get_circuit_prediction(task: str = 'ioi', N: int = 50):
     torch.set_grad_enabled(False)
