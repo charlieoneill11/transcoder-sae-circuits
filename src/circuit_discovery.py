@@ -1,6 +1,7 @@
 import torch
 import einops
 import circuitsvis as cv
+import plotly.express as px
 
 from typing import Union, Optional, List, Dict, Tuple, Set, Callable
 from circuit_lens import (
@@ -12,7 +13,7 @@ from circuit_lens import (
 from graphviz import Digraph
 from functools import partial
 from transformer_lens.hook_points import HookPoint
-from transformer_lens import ActivationCache
+from transformer_lens import ActivationCache, HookedTransformer
 from ranking_utils import visualize_top_tokens_for_seq
 from jaxtyping import Float
 from IPython.display import HTML
@@ -815,45 +816,16 @@ class CircuitDiscovery:
 
         return all_ids
 
-    def get_graph_feature_vec(self):
-        num_head_sources = self.model.cfg.n_heads * (self.model.cfg.n_layers)
-        num_mlp_sources = self.model.cfg.n_layers - 1
+    def get_graph_edge_matrix(self, flatten=False):
+        matrix_methods = EdgeMatrixMethods(self.model)
 
-        num_head_targets = 3 * self.model.cfg.n_heads * (self.model.cfg.n_layers - 1)
-        num_mlp_targets = self.model.cfg.n_layers
-
-        edge_matrix = torch.zeros(
-            size=(
-                num_head_sources + num_mlp_sources,
-                num_head_targets + num_mlp_targets,
-            )
-        )
-
-        def head_source_index(layer: int, head: int):
-            return (layer * self.model.cfg.n_heads) + head
-
-        def mlp_source_index(layer: int):
-            return num_head_sources + layer
-
-        def head_target_index(layer: int, head: int, head_type: str):
-            if head_type == "q":
-                type_i = 0
-            elif head_type == "k":
-                type_i = 1
-            elif head_type == "v":
-                type_i = 2
-
-            # Head 0 isn't a target
-            return ((layer - 1) * self.model.cfg.n_heads * 3) + (head * 3) + type_i
-
-        def mlp_target_index(layer: int):
-            return num_head_targets + layer
+        edge_matrix = matrix_methods.create_empty_edge_matrix()
 
         def get_contrib_source_indices(contrib: CircuitDiscoveryRegularNode):
             indices = []
 
             if contrib.component == CircuitComponent.MLP_FEATURE:
-                indices.append(mlp_source_index(contrib.layer))
+                indices.append(matrix_methods.mlp_source_index(contrib.layer))
             elif contrib.component in [
                 CircuitComponent.Z_FEATURE,
                 CircuitComponent.Z_SAE_ERROR,
@@ -862,7 +834,9 @@ class CircuitDiscovery:
                     if not isinstance(head, CircuitDiscoveryHeadNode):
                         continue
 
-                    indices.append(head_source_index(head.layer, head.head))
+                    indices.append(
+                        matrix_methods.head_source_index(head.layer, head.head)
+                    )
 
             return indices
 
@@ -880,7 +854,9 @@ class CircuitDiscovery:
 
                     source_indices = get_contrib_source_indices(contrib)
 
-                    edge_matrix[source_indices, mlp_target_index(node.layer)] = 1
+                    edge_matrix[
+                        source_indices, matrix_methods.mlp_target_index(node.layer)
+                    ] = 1
             elif isinstance(node, CircuitDiscoveryHeadNode):
                 for head_type in ["q", "k", "v"]:
                     for contrib in node.contributors_in_graph(head_type):
@@ -891,13 +867,18 @@ class CircuitDiscovery:
 
                         edge_matrix[
                             source_indices,
-                            head_target_index(node.layer, node.head, head_type),
+                            matrix_methods.head_target_index(
+                                node.layer, node.head, head_type
+                            ),
                         ] = 1
 
         fn = partial(visit_fn, edge_matrix=edge_matrix)
         self.traverse_graph(fn)
 
-        return einops.rearrange(edge_matrix, "s t -> (s t)")
+        if flatten:
+            return einops.rearrange(edge_matrix, "s t -> (s t)")
+        else:
+            return edge_matrix
 
     def get_token_pos_referenced_by_graph(self, no_bos=False) -> List[int]:
         pos_set = set()
@@ -2018,3 +1999,149 @@ class CircuitDiscovery:
         """
         self.reset_graph()
         self.recursive_explore_all_nodes(self.root_node, contributors_per_node)
+
+
+class EdgeMatrixMethods:
+    def __init__(self, model: HookedTransformer):
+        self.model = model
+
+        self.num_head_sources = self.model.cfg.n_heads * (self.model.cfg.n_layers)
+        self.num_mlp_sources = self.model.cfg.n_layers - 1
+
+        self.num_head_targets = (
+            3 * self.model.cfg.n_heads * (self.model.cfg.n_layers - 1)
+        )
+        self.num_mlp_targets = self.model.cfg.n_layers
+
+    def create_empty_edge_matrix(self):
+        return torch.zeros(
+            self.num_head_sources + self.num_mlp_sources,
+            self.num_head_targets + self.num_mlp_targets,
+        )
+
+    def head_source_index(self, layer: int, head: int):
+        return (layer * self.model.cfg.n_heads) + head
+
+    def mlp_source_index(self, layer: int):
+        return self.num_head_sources + layer
+
+    def head_target_index(self, layer: int, head: int, head_type: str):
+        if head_type == "q":
+            type_i = 0
+        elif head_type == "k":
+            type_i = 1
+        elif head_type == "v":
+            type_i = 2
+
+        # Head 0 isn't a target
+        return ((layer - 1) * self.model.cfg.n_heads * 3) + (head * 3) + type_i
+
+    def mlp_target_index(self, layer: int):
+        return self.num_head_targets + layer
+
+
+class EdgeMatrixAnalyzer:
+    def __init__(self, methods: EdgeMatrixMethods, graph_matrices, seq_pos):
+        self.methods = methods
+        self.model = methods.model
+
+        self.graph_matrices = graph_matrices
+        self.graph_matrix_total = graph_matrices.sum(dim=0)
+
+        self.seq_pos = seq_pos
+
+    def get_source_labels(self):
+        labels = []
+
+        for layer in range(self.model.cfg.n_layers):
+            for head in range(self.model.cfg.n_heads):
+                labels.append(f"L{layer}H{head}")
+
+        for layer in range(self.model.cfg.n_layers - 1):
+            labels.append(f"L{layer}MLP")
+
+        return labels
+
+    def get_target_labels(self):
+        labels = []
+
+        for layer in range(1, self.model.cfg.n_layers):
+            for head in range(self.model.cfg.n_heads):
+                labels.append(f"L{layer}H{head}Q")
+                labels.append(f"L{layer}H{head}K")
+                labels.append(f"L{layer}H{head}V")
+
+        for layer in range(self.model.cfg.n_layers):
+            labels.append(f"L{layer}MLP")
+
+        return labels
+
+    def imshow_totals(self):
+        imshow(
+            self.graph_matrix_total,
+            x=self.get_target_labels(),
+            y=self.get_source_labels(),
+            zmax=20,
+            zmin=-20,
+            labels={"x": "Target", "y": "Source"},
+        )
+
+    def get_matrices_given_source_dest(self, source_dest_list):
+        gm = self.graph_matrices
+        sp = self.seq_pos
+
+        for source, dest in source_dest_list:
+            indices = (
+                gm[
+                    :,
+                    self.methods.head_source_index(*source),
+                    self.methods.head_target_index(*dest),
+                ]
+                .nonzero()
+                .squeeze()
+            )
+
+            gm = gm[indices]
+            sp = sp[indices]
+
+        return gm, sp
+
+    def get_top_head_connections(self, layer_thresh=1, k=100, source_dest_list=[]):
+        source_labels = self.get_source_labels()
+        target_labels = self.get_target_labels()
+
+        gm, _ = self.get_matrices_given_source_dest(source_dest_list)
+
+        # gm = self.graph_matrices
+
+        # for source, dest in source_dest_list:
+        #     indices = (
+        #         gm[
+        #             :,
+        #             self.methods.head_source_index(*source),
+        #             self.methods.head_target_index(*dest),
+        #         ]
+        #         .nonzero()
+        #         .squeeze()
+        #     )
+
+        #     gm = gm[indices.int()]
+
+        gm = gm.sum(dim=0)
+
+        total = gm[: self.methods.num_head_sources, : self.methods.num_head_targets]
+
+        total[: layer_thresh * self.model.cfg.n_heads, :] = 0
+
+        top_vals, top_indices = torch.topk(total.flatten(), k=k)
+        top_indices = torch.stack(torch.unravel_index(top_indices, total.shape)).T
+
+        top_list = []
+        for v, source_target in zip(top_vals, top_indices):
+            print(source_target)
+            source, target = source_target
+            source, target = source, target
+
+            top_list.append((source_labels[source], target_labels[target], v))
+
+        return top_list

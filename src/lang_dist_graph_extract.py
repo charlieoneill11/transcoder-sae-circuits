@@ -31,7 +31,9 @@ class LanguageDistributionGraphExtract:
 
         self.model = get_model_encoders(self.device)[0]
 
-    def get_circuit_discovery_for_seq(self, seq_index, target_index, visualize=True):
+    def get_circuit_discovery_for_seq(
+        self, seq_index, index, is_target_index=True, visualize=True
+    ):
         toks = open_web_text_tokens[seq_index].to("cuda")
         logits = self.model(toks)
         prob = logits.softmax(dim=-1)
@@ -44,7 +46,12 @@ class LanguageDistributionGraphExtract:
         ).float()
 
         targets = mask.nonzero().squeeze()
-        target = targets[target_index] + 1
+
+        if is_target_index:
+            target = targets[index] + 1
+            target = target.item()
+        else:
+            target = index
 
         cd = CircuitDiscovery(
             prompt=self.model.tokenizer.decode(toks[1:target]),
@@ -59,7 +66,11 @@ class LanguageDistributionGraphExtract:
                 "Target: ",
                 self.model.tokenizer.decode(toks[target]),
                 "::",
-                target.item(),
+                target,
+            )
+            print(
+                "Context:",
+                self.model.tokenizer.decode(toks[max(target - 3, 0) : target + 3]),
             )
             masked_vals = mask * values[:-1]
 
@@ -75,8 +86,12 @@ class LanguageDistributionGraphExtract:
         feature_vecs = []
         seq_pos = []
 
-        for k, range_indices in enumerate(
-            torch.split(torch.arange(0, self.num_seqs), self.seq_batch_size)
+        for k, range_indices in tqdm(
+            list(
+                enumerate(
+                    torch.split(torch.arange(0, self.num_seqs), self.seq_batch_size)
+                )
+            )
         ):
             toks = open_web_text_tokens[range_indices]  # .to("cuda")
             logits = self.model(toks)
@@ -90,15 +105,13 @@ class LanguageDistributionGraphExtract:
                 values[:, :-1].cpu() > self.filter_threshold,
             ).float()
 
-            for count, i in enumerate(range_indices):
-                seq_i = k * self.seq_batch_size + count
-
-                print("Sequence: ", seq_i)
+            for i, seq_i in enumerate(range_indices):
+                # print("Sequence: ", seq_i.item())
                 targets = mask[i].nonzero().squeeze()
 
                 total = 0
 
-                for target in tqdm(targets):
+                for target in targets:
                     target += 1
 
                     if target < 2:
@@ -115,10 +128,11 @@ class LanguageDistributionGraphExtract:
                     if not cd.are_heads_above_layer(self.head_layer_threshold):
                         continue
 
-                    feature_vecs.append(cd.get_graph_feature_vec())
-                    seq_pos.append((i.item(), target.item()))
+                    feature_vecs.append(cd.get_graph_edge_matrix())
+                    seq_pos.append((seq_i.item(), target.item()))
                     total += 1
 
-                print(f"Total added for Seq {seq_i}: {total}")
+                # print(f"Total added for Seq {seq_i}: {total}")
 
-        return torch.stack(feature_vecs), torch.tensor(seq_pos)
+        # return torch.stack(feature_vecs), torch.tensor(seq_pos)
+        return feature_vecs, seq_pos
