@@ -3,9 +3,6 @@ import einops
 import circuitsvis as cv
 
 from open_web_text import open_web_text_tokens
-from mlp_transcoder import SparseTranscoder
-from z_sae import ZSAE
-from transformer_lens import HookedTransformer
 from tqdm import trange
 from typing import List
 from IPython.display import display

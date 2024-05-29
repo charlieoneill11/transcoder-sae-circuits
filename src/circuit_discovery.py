@@ -272,12 +272,12 @@ class TransformerAnalysisModel(AnalysisObject):
     def get_discovery_node_at_locator(
         self, locator: Union[ComponentLens, Tuple]
     ) -> "CircuitDiscoveryNode":
-        if isinstance(locator, ComponentLens):
-            lens = locator
-            tuple_id: Tuple = lens.tuple_id
-        else:
+        if isinstance(locator, tuple):
             lens = None
             tuple_id: Tuple = locator
+        else:
+            lens = locator
+            tuple_id: Tuple = lens.tuple_id
 
         component = tuple_id[0]
 
@@ -815,6 +815,90 @@ class CircuitDiscovery:
 
         return all_ids
 
+    def get_graph_feature_vec(self):
+        num_head_sources = self.model.cfg.n_heads * (self.model.cfg.n_layers)
+        num_mlp_sources = self.model.cfg.n_layers - 1
+
+        num_head_targets = 3 * self.model.cfg.n_heads * (self.model.cfg.n_layers - 1)
+        num_mlp_targets = self.model.cfg.n_layers
+
+        edge_matrix = torch.zeros(
+            size=(
+                num_head_sources + num_mlp_sources,
+                num_head_targets + num_mlp_targets,
+            )
+        )
+
+        def head_source_index(layer: int, head: int):
+            return (layer * self.model.cfg.n_heads) + head
+
+        def mlp_source_index(layer: int):
+            return num_head_sources + layer
+
+        def head_target_index(layer: int, head: int, head_type: str):
+            if head_type == "q":
+                type_i = 0
+            elif head_type == "k":
+                type_i = 1
+            elif head_type == "v":
+                type_i = 2
+
+            # Head 0 isn't a target
+            return ((layer - 1) * self.model.cfg.n_heads * 3) + (head * 3) + type_i
+
+        def mlp_target_index(layer: int):
+            return num_head_targets + layer
+
+        def get_contrib_source_indices(contrib: CircuitDiscoveryRegularNode):
+            indices = []
+
+            if contrib.component == CircuitComponent.MLP_FEATURE:
+                indices.append(mlp_source_index(contrib.layer))
+            elif contrib.component in [
+                CircuitComponent.Z_FEATURE,
+                CircuitComponent.Z_SAE_ERROR,
+            ]:
+                for head in contrib.contributors_in_graph:
+                    if not isinstance(head, CircuitDiscoveryHeadNode):
+                        continue
+
+                    indices.append(head_source_index(head.layer, head.head))
+
+            return indices
+
+        def visit_fn(node: CircuitDiscoveryNode, edge_matrix):
+            if node.component not in [
+                CircuitComponent.ATTN_HEAD,
+                CircuitComponent.MLP_FEATURE,
+            ]:
+                return
+
+            if isinstance(node, CircuitDiscoveryRegularNode):
+                for contrib in node.contributors_in_graph:
+                    if not isinstance(contrib, CircuitDiscoveryRegularNode):
+                        continue
+
+                    source_indices = get_contrib_source_indices(contrib)
+
+                    edge_matrix[source_indices, mlp_target_index(node.layer)] = 1
+            elif isinstance(node, CircuitDiscoveryHeadNode):
+                for head_type in ["q", "k", "v"]:
+                    for contrib in node.contributors_in_graph(head_type):
+                        if not isinstance(contrib, CircuitDiscoveryRegularNode):
+                            continue
+
+                        source_indices = get_contrib_source_indices(contrib)
+
+                        edge_matrix[
+                            source_indices,
+                            head_target_index(node.layer, node.head, head_type),
+                        ] = 1
+
+        fn = partial(visit_fn, edge_matrix=edge_matrix)
+        self.traverse_graph(fn)
+
+        return einops.rearrange(edge_matrix, "s t -> (s t)")
+
     def get_token_pos_referenced_by_graph(self, no_bos=False) -> List[int]:
         pos_set = set()
 
@@ -1154,6 +1238,15 @@ class CircuitDiscovery:
             attn_heads[layer].append(head)
 
         return attn_heads, mlps
+
+    def are_heads_above_layer(self, layer: int):
+        attn_heads, _ = self.get_heads_and_mlps_in_graph()
+
+        for layer_heads in attn_heads[layer:]:
+            if layer_heads:
+                return True
+
+        return False
 
     def get_heads_and_mlps_in_graph_at_seq(
         self,

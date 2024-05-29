@@ -1,15 +1,13 @@
 import torch
 import einops
 
-from z_sae import ZSAE
-from mlp_transcoder import SparseTranscoder
 from transformer_lens import HookedTransformer
 from jaxtyping import Float, Int
 from torch import Tensor
 from typing import List, Dict, TypedDict, Any, Union, Tuple, Optional
-from tqdm import trange
 from plotly_utils import imshow
 from pprint import pprint
+from load_model_and_encoders import get_model_encoders
 
 from dataclasses import dataclass
 
@@ -525,32 +523,6 @@ class ComponentLens:
         return [], None
 
 
-model_encoder_cache: Optional[Tuple[HookedTransformer, Any, Any]] = None
-
-
-def get_model_encoders(device):
-    global model_encoder_cache
-
-    if model_encoder_cache is not None:
-        return model_encoder_cache
-
-    model = HookedTransformer.from_pretrained("gpt2-small", device=device)
-
-    print()
-    print("Loading SAEs...")
-    z_saes = [ZSAE.load_zsae_for_layer(i) for i in trange(model.cfg.n_layers)]
-
-    print()
-    print("Loading Transcoders...")
-    mlp_transcoders = [
-        SparseTranscoder.load_from_hugging_face(i) for i in trange(model.cfg.n_layers)
-    ]
-
-    model_encoder_cache = (model, z_saes, mlp_transcoders)
-
-    return model_encoder_cache
-
-
 class CircuitLens:
     def __init__(self, prompt):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -952,7 +924,7 @@ class CircuitLens:
     ):
         seq_index = self.process_seq_index(seq_index)
 
-        error_vector = self.get_active_features(layer).get_z_error(layer)
+        error_vector = self.get_active_features(seq_index).get_z_error(layer)
         error_vector = einops.rearrange(
             error_vector, "(n_head d_head) -> n_head d_head", n_head=12
         )

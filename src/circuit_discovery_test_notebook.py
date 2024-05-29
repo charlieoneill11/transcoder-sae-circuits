@@ -56,6 +56,10 @@ counter = CircuitDiscovery(IOI_COUNTER, -2, allowed_components_filter=only_featu
 p = "Mary and Jeff went to the store, and Mary gave an apple to"
 cd = CircuitDiscovery(p, token=" Jeff", allowed_components_filter=only_feature)
 
+# %%
+cd.component_lens_at_loc([1, 0, 'q'])
+
+
 
 # %%
 
