@@ -816,7 +816,7 @@ class CircuitDiscovery:
 
         return all_ids
 
-    def get_graph_edge_matrix(self, flatten=False):
+    def get_graph_edge_matrix(self, flatten=False, only_include_head_edges=False):
         matrix_methods = EdgeMatrixMethods(self.model)
 
         edge_matrix = matrix_methods.create_empty_edge_matrix()
@@ -825,7 +825,14 @@ class CircuitDiscovery:
             indices = []
 
             if contrib.component == CircuitComponent.MLP_FEATURE:
-                indices.append(matrix_methods.mlp_source_index(contrib.layer))
+                if only_include_head_edges:
+                    for node in contrib.contributors_in_graph:
+                        if not isinstance(node, CircuitDiscoveryRegularNode):
+                            continue
+
+                        indices.extend(get_contrib_source_indices(node))
+                else:
+                    indices.append(matrix_methods.mlp_source_index(contrib.layer))
             elif contrib.component in [
                 CircuitComponent.Z_FEATURE,
                 CircuitComponent.Z_SAE_ERROR,
@@ -2076,13 +2083,23 @@ class EdgeMatrixAnalyzer:
 
         return labels
 
-    def imshow_totals(self):
+    def imshow_totals(self, no_clip=False, zmax=None):
+        if zmax is None:
+            zmax = 20
+            zmin = -20
+        else:
+            zmin = -zmax
+
+        if no_clip:
+            zmax = None
+            zmin = None
+
         imshow(
             self.graph_matrix_total,
             x=self.get_target_labels(),
             y=self.get_source_labels(),
-            zmax=20,
-            zmin=-20,
+            zmax=zmax,
+            zmin=zmin,
             labels={"x": "Target", "y": "Source"},
         )
 
