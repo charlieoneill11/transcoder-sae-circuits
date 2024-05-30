@@ -149,36 +149,6 @@ class TransformerAnalysisLayer(AnalysisObject):
         ]
 
 
-# class ComponentEdgeTracker:
-#     def __init__(self, transformer_model: "TransformerAnalysisModel"):
-#         self._reciever_to_contributors: Dict[Tuple, Set[Tuple]] = {}
-#         self._contributor_to_recievers: Dict[Tuple, Set[Tuple]] = {}
-
-#         self.transformer_model = transformer_model
-
-#     def add_edge(self, reciever: Tuple, contributor: Tuple):
-#         if reciever not in self._reciever_to_contributors:
-#             self._reciever_to_contributors[reciever] = set()
-#         if contributor not in self._contributor_to_recievers:
-#             self._contributor_to_recievers[contributor] = set()
-
-#         self._reciever_to_contributors[reciever].add(contributor)
-#         self._contributor_to_recievers[contributor].add(reciever)
-
-#     def remove_edge(self, reciever: Tuple, contributor: Tuple):
-#         if reciever in self._reciever_to_contributors:
-#             self._reciever_to_contributors[reciever].discard(contributor)
-#         if contributor in self._contributor_to_recievers:
-#             self._contributor_to_recievers[contributor].discard(reciever)
-
-#     def get_contributors(self, reciever: Tuple) -> List[Tuple]:
-#         return list(self._reciever_to_contributors.get(reciever, set()))
-
-#     def clear(self):
-#         self._reciever_to_contributors = {}
-#         self._contributor_to_recievers = {}
-
-
 class ComponentEdgeTracker:
     def __init__(self, transformer_model: "TransformerAnalysisModel"):
         self._reciever_to_contributors: Dict[Tuple, Dict[Tuple, float]] = {}
@@ -211,10 +181,6 @@ class ComponentEdgeTracker:
     def get_total_contributions(self, component_type, layer, head):
         incoming_contributions = 0
         outgoing_contributions = 0
-
-        # for reciever, contributors in self._reciever_to_contributors.items():
-        #     if reciever[:3] == (component_type, layer, head):
-        #         incoming_contributions += sum(contributors.values())
 
         for contributor, recievers in self._contributor_to_recievers.items():
             if contributor[:3] == (component_type, layer, head):
@@ -1160,11 +1126,6 @@ class CircuitDiscovery:
 
                         queue.append(child_discovery_node)
 
-                    # print(
-                    #     node.tuple_id_for_head_type(head_type),
-                    #     f"Contrib: {total_contrib:.3g}%",
-                    # )
-
     def attn_heads_tensor(self, visualize=False):
         attn_heads = torch.zeros(12, 12)
 
@@ -1490,7 +1451,6 @@ class CircuitDiscovery:
 
         graph_logits = graph_logits[self.seq_index]
         mean_logits = mean_logits[self.seq_index]
-        # print("shapez", base_logits.shape, graph_logits.shape, mean_logits.shape)
 
         tokens = self.model.to_tokens(
             [correct_str_token, counter_str_token], prepend_bos=False
@@ -2128,21 +2088,6 @@ class EdgeMatrixAnalyzer:
         target_labels = self.get_target_labels()
 
         gm, _ = self.get_matrices_given_source_dest(source_dest_list)
-
-        # gm = self.graph_matrices
-
-        # for source, dest in source_dest_list:
-        #     indices = (
-        #         gm[
-        #             :,
-        #             self.methods.head_source_index(*source),
-        #             self.methods.head_target_index(*dest),
-        #         ]
-        #         .nonzero()
-        #         .squeeze()
-        #     )
-
-        #     gm = gm[indices.int()]
 
         gm = gm.sum(dim=0)
 

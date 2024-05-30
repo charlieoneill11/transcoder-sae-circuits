@@ -82,7 +82,7 @@ class LanguageDistributionGraphExtract:
 
         return cd
 
-    def run(self):
+    def run(self, visualize=False):
         feature_vecs = []
         seq_pos = []
 
@@ -106,7 +106,9 @@ class LanguageDistributionGraphExtract:
             ).float()
 
             for i, seq_i in enumerate(range_indices):
-                # print("Sequence: ", seq_i.item())
+                if visualize:
+                    print("Sequence: ", seq_i.item())
+
                 targets = mask[i].nonzero().squeeze()
 
                 total = 0
@@ -132,7 +134,7 @@ class LanguageDistributionGraphExtract:
                     seq_pos.append((seq_i.item(), target.item()))
                     total += 1
 
-                # print(f"Total added for Seq {seq_i}: {total}")
+                if visualize:
+                    print(f"Total added for Seq {seq_i}: {total}")
 
-        # return torch.stack(feature_vecs), torch.tensor(seq_pos)
         return feature_vecs, seq_pos

@@ -1,5 +1,3 @@
-import torch
-
 from dataclasses import dataclass
 from circuit_discovery import (
     CircuitDiscovery,
@@ -53,7 +51,7 @@ class CircuitInterp:
 
     @property
     def final_token(self) -> str:
-        return self.model.tokenizer.decode(self.circuit_discovery.token)
+        return self.model.tokenizer.decode(self.circuit_discovery.token)  # type: ignore
 
     def interpret_heads_in_circuit(self, layer_threshold=-1, visualize=False):
         queue: List[LabeledFeature] = []
@@ -251,7 +249,6 @@ class CircuitInterp:
         head_explanation = extract_explanation(
             res,
             delim="ATTENTION_HEAD_COMPUTATION_DESCRIPTION",
-            # delim="ATTENTION_HEAD_COMPUTATION_HYPOTHESIS",
         )
 
         head_label = extract_explanation(res, delim="ATTENTION_HEAD_LABEL")
