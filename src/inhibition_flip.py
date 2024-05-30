@@ -22,7 +22,6 @@ from tqdm import trange
 
 from transformer_lens import HookedTransformer, utils
 
-# from data.ioi_dataset import GT_GROUND_TRUTH_HEADS
 from memory import get_gpu_memory
 
 # %%
@@ -73,9 +72,6 @@ else:
     abba_coeff = 30
     baba_coeff = -5
 
-    # abba_coeff = 30
-    # baba_coeff = -5
-
 for i in trange(N):
     prompt_ex = dataset[i]
     prompt = prompt_ex["text"]
@@ -90,12 +86,6 @@ for i in trange(N):
 
     base_correct += base_softmax[correct_token].item()
     base_counter += base_softmax[counter_token].item()
-
-    # print(prompt)
-    # visualize_top_tokens(model, base_logits)
-
-    big_abba = abba_feature - baba_feature
-    # big_abba = einops.rearrange(big_abba, "(n_heads d_head) -> n_heads d_head", n_heads=12)
 
     abba = einops.rearrange(
         abba_feature, "(n_heads d_head) -> n_heads d_head", n_heads=12
@@ -119,9 +109,6 @@ for i in trange(N):
     steered_correct += steered_softmax[correct_token].item()
     steered_counter += steered_softmax[counter_token].item()
 
-# visualize_top_tokens_for_seq(
-#     model, tokens, steered_logits, -1, token=prompt_ex["correct"]
-# )
 
 steered_correct /= N
 steered_counter /= N
@@ -130,8 +117,6 @@ base_correct /= N
 base_counter /= N
 
 data = {
-    # 'Category': ['A', 'B', 'C', 'D'],
-    # 'Values': [10, 20, 30, 40]
     "Category": [
         "Correct Name (Base)",
         "Incorrect Name (Base)",
@@ -147,8 +132,6 @@ fig = px.bar(
     df,
     x="Category",
     y="Probability",
-    # x=["Base Correct", "Base Incorrect", "Steered Correct", "Steered Incorrect"],
-    # y=[base_correct, base_counter, steered_correct, steered_counter],
     color="Category",
     color_discrete_sequence=["blue", "blue", "red", "red"],
     title=f"{data_type} Probability Mass Before/After Steering ({N} Samples)",
@@ -157,15 +140,3 @@ fig = px.bar(
 fig.update_layout(showlegend=False)
 
 fig.show()
-
-# %%
-cache["z", 0].shape
-
-model.to_single_token(" Jeff")
-
-# %%
-px.bar(x=["x", "y"], y=[9, 1]).show()
-
-
-# %%
-base_softmax.shape

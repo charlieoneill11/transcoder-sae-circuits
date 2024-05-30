@@ -14,18 +14,19 @@ from discovery_strategies import create_simple_greedy_strategy, create_filter
 torch.set_grad_enabled(False)
 
 # %%
-
 dataset_prompts = gen_templated_prompts(template_idex=1, N=500)
 
 # %% 
-
 strat = create_simple_greedy_strategy(passes=1)
 no_sae_error_filter = create_filter(no_sae_error=True)
 
 # %%
-pi = 2
+pi = 6
 
 print(dataset_prompts[pi]["text"])
+
+# %%
+
 
 cd = CircuitDiscovery(
     dataset_prompts[pi]["text"],
@@ -33,23 +34,25 @@ cd = CircuitDiscovery(
     allowed_components_filter=no_sae_error_filter,
 )
 strat(cd)
+# %%
+
 cd.print_attn_heads_and_mlps_in_graph()
 # %%
-
-
-# %%
-
 cd.visualize_graph()
 
-# %%
-cd.root_node.sorted_contributors_in_graph[0]
 
 # %%
-
 ci = CircuitInterp(cd, strat, num_max_act_seqs_in_prompt=10, num_open_web_text_seq=5000)
 
 # %%
 ex_dick = ci.interpret_heads_in_circuit(visualize=True, layer_threshold=0)
+
+# %%
+for v in ex_dick.values():
+    print(v[0].strip("\n"))
+    print(v[1].strip("\n"))
+    print()
+
 
 # %%
 

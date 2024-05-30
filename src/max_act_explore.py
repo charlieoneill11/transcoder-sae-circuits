@@ -20,19 +20,6 @@ from text_utils import dd
 # %%
 torch.set_grad_enabled(False)
 
-# %%
-thsi_is_a_string = """
-    I find that the 
-    best time of 
-
-    day to  do stuff
-    is the afternoon
-"""
-
-print(thsi_is_a_string)
-print(dd(thsi_is_a_string))
-
-
 
 # %%
 feature = 16513

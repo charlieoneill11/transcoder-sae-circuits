@@ -175,9 +175,6 @@ line(
     }
 )
 
-# %% [markdown]
-# # The final lad
-
 # %%
 pre_layer = 4
 post_layer = 7

@@ -345,49 +345,6 @@ class TaskEvaluation:
         if return_freqs:
             return weighted_head_freqs
 
-    # def get_features_at_heads_over_dataset(self, N=None):
-    #     if N is None:
-    #         N = len(self.prompts)
-
-    #     n_layers = self.model.cfg.n_layers
-    #     n_heads = self.model.cfg.n_heads
-
-    #     features_for_heads = [[set() for _ in range(n_heads)] for _ in range(n_layers)]
-
-    #     for i in trange(N):
-    #         cd = self.get_circuit_discovery_for_prompt(i)
-
-    #         prompt_features_for_heads = cd.get_features_at_heads_in_graph()
-
-    #         for layer in range(n_layers):
-    #             for head in range(n_heads):
-    #                 features_for_heads[layer][head].update(
-    #                     prompt_features_for_heads[layer][head]
-    #                 )
-
-    #     return features_for_heads
-
-    # def get_features_at_mlps_over_dataset(self, N=None):
-
-    #     if N is None:
-    #         N = len(self.prompts)
-
-    #     n_layers = self.model.cfg.n_layers
-
-    #     features_for_mlps = [set() for _ in range(n_layers)]
-
-    #     for i in trange(N):
-    #         cd = self.get_circuit_discovery_for_prompt(i)
-
-    #         prompt_features_for_mlps = cd.get_features_at_mlps_in_graph()
-
-    #         for layer in range(n_layers):
-    #             features_for_mlps[layer].update(
-    #                 prompt_features_for_mlps[layer]
-    #             )
-
-    #     return features_for_mlps
-
     def get_features_at_heads_over_dataset(self, N=None, use_set=True):
         if N is None:
             N = len(self.prompts)
@@ -504,8 +461,6 @@ class TaskEvaluation:
         if rand:
             attn_freqs = torch.rand_like(attn_freqs)
 
-        # imshow(attn_freqs)
-
         flattened_indices = torch.argsort(attn_freqs.view(-1), descending=True)
 
         # Step 3: Convert flattened indices back to multidimensional indices
@@ -523,9 +478,6 @@ class TaskEvaluation:
             )
 
             return mean_acts
-            # print("ablating!", hook.name)
-            # return
-            # return torch.zeros_like(acts)
 
         corrupted_logits = self.model.run_with_hooks(
             tokens, fwd_hooks=[(Z_FILTER, z_ablate_all)], return_type="logits"
@@ -534,11 +486,7 @@ class TaskEvaluation:
         corrupted_diff = logits_to_ave_diff(corrupted_logits)
         base_diff = logits_to_ave_diff(base_logits)
 
-        # print("base cor", base_diff, corrupted_diff)
-
         corrupted_kl = kl_div(corrupted_logits)
-
-        # print("corrupted kl", corrupted_kl)
 
         def normalized_kl(logits):
             return (kl_div(logits) - corrupted_kl) / (-corrupted_kl)
@@ -552,8 +500,6 @@ class TaskEvaluation:
 
         def z_ablate_hook(acts, hook: HookPoint, heads_to_keep):
             heads_to_keep_at_layer = heads_to_keep[hook.layer()]
-
-            # print("ablate", hook.name, heads_to_keep_at_layer)
 
             mean_acts = einops.repeat(
                 self.mean_cache[hook.name], "... -> B ...", B=acts.size(0)

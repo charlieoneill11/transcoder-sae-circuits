@@ -31,6 +31,11 @@ cd = CircuitDiscovery(IOI_EXAMPLE_PROMPT, -2, allowed_components_filter=only_fea
 counter = CircuitDiscovery(IOI_COUNTER, -2, allowed_components_filter=only_feature)
 
 # %%
+cd.component_lens_at_loc([0, 0, 'q'])
+
+
+
+# %%
 pass_based = True
 
 passes = 5
