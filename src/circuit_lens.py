@@ -1,15 +1,13 @@
 import torch
 import einops
 
-from z_sae import ZSAE
-from mlp_transcoder import SparseTranscoder
 from transformer_lens import HookedTransformer
 from jaxtyping import Float, Int
 from torch import Tensor
 from typing import List, Dict, TypedDict, Any, Union, Tuple, Optional
-from tqdm import trange
 from plotly_utils import imshow
 from pprint import pprint
+from load_model_and_encoders import get_model_encoders
 
 from dataclasses import dataclass
 
@@ -260,7 +258,7 @@ class ActiveFeatures:
                         component=component,
                         run_data={
                             "layer": layer,
-                            "seq_index": seq_index,
+                            "seq_index": int(seq_index),
                             "feature": feature_i,
                         },
                     ),
@@ -332,8 +330,6 @@ ComponentLensWithValue = Tuple["ComponentLens", float]
 class ComponentLens:
     circuit_lens: "CircuitLens"
     component: str
-    circuit_lens: "CircuitLens"
-    component: str
     run_data: Dict[str, Any]
 
     @property
@@ -341,26 +337,68 @@ class ComponentLens:
         if self.component == CircuitComponent.UNEMBED:
             return (
                 self.component,
-                self.run_data["seq_index"],
-                self.run_data["token_id"],
+                int(self.run_data["seq_index"]),
+                int(self.run_data["token_id"]),
             )
         elif self.component == CircuitComponent.UNEMBED_AT_TOKEN:
             return (self.component, self.run_data["seq_index"])
         elif self.component == CircuitComponent.ATTN_HEAD:
             return (
                 self.component,
-                self.run_data["layer"],
-                self.run_data["head"],
-                self.run_data["source_index"],
-                self.run_data["destination_index"],
-                self.run_data["feature"],
+                int(self.run_data["layer"]),
+                int(self.run_data["head"]),
+                int(self.run_data["source_index"]),
+                int(self.run_data["destination_index"]),
+                int(self.run_data["feature"]),
             )
         else:
             return (
                 self.component,
-                self.run_data["layer"],
-                self.run_data["seq_index"],
-                self.run_data["feature"],
+                int(self.run_data["layer"]),
+                int(self.run_data["seq_index"]),
+                int(self.run_data["feature"]),
+            )
+
+    @classmethod
+    def init_from_tuple_id(cls, tuple_id, circuit_lens):
+        component = tuple_id[0]
+
+        if component == CircuitComponent.UNEMBED:
+            return cls(
+                circuit_lens=circuit_lens,
+                component=component,
+                run_data={
+                    "seq_index": tuple_id[1],
+                    "token_id": tuple_id[2],
+                },
+            )
+        elif component == CircuitComponent.UNEMBED_AT_TOKEN:
+            return cls(
+                circuit_lens=circuit_lens,
+                component=component,
+                run_data={"seq_index": tuple_id[1]},
+            )
+        elif component == CircuitComponent.ATTN_HEAD:
+            return cls(
+                circuit_lens=circuit_lens,
+                component=component,
+                run_data={
+                    "layer": tuple_id[1],
+                    "head": tuple_id[2],
+                    "source_index": tuple_id[3],
+                    "destination_index": tuple_id[4],
+                    "feature": tuple_id[5],
+                },
+            )
+        else:
+            return cls(
+                circuit_lens=circuit_lens,
+                component=component,
+                run_data={
+                    "layer": tuple_id[1],
+                    "seq_index": tuple_id[2],
+                    "feature": tuple_id[3],
+                },
             )
 
     @classmethod
@@ -483,32 +521,6 @@ class ComponentLens:
             )
 
         return [], None
-
-
-model_encoder_cache: Optional[Tuple[HookedTransformer, Any, Any]] = None
-
-
-def get_model_encoders(device):
-    global model_encoder_cache
-
-    if model_encoder_cache is not None:
-        return model_encoder_cache
-
-    model = HookedTransformer.from_pretrained("gpt2-small", device=device)
-
-    print()
-    print("Loading SAEs...")
-    z_saes = [ZSAE.load_zsae_for_layer(i) for i in trange(model.cfg.n_layers)]
-
-    print()
-    print("Loading Transcoders...")
-    mlp_transcoders = [
-        SparseTranscoder.load_from_hugging_face(i) for i in trange(model.cfg.n_layers)
-    ]
-
-    model_encoder_cache = (model, z_saes, mlp_transcoders)
-
-    return model_encoder_cache
 
 
 class CircuitLens:
@@ -645,6 +657,9 @@ class CircuitLens:
             features.append(mlp_max_features.squeeze())
 
             component_keys.append({"mlp": mlp_winner_count, "attn": z_winner_count})
+
+        values = [v if v.dim() > 0 else v.unsqueeze(0) for v in values]
+        features = [f if f.dim() > 0 else f.unsqueeze(0) for f in features]
 
         component_vectors = torch.cat(vectors, dim=0)
         component_values = torch.cat(values, dim=0)
@@ -853,9 +868,9 @@ class CircuitLens:
                         run_data={
                             "layer": layer,
                             "head": head,
-                            "source_index": source,
+                            "source_index": int(source),
                             "feature": feature,
-                            "destination_index": seq_index,
+                            "destination_index": int(seq_index),
                         },
                     ),
                     value,
@@ -903,65 +918,6 @@ class CircuitLens:
         return self.get_head_seq_lens_for_activations(
             feature_act, layer, seq_index, feature, visualize=visualize, k=k
         )
-
-        # # feature_act /= feature_act.sum()
-        # feature_act = self.normalize_activations(feature_act)
-
-        # values, indices = feature_act.topk(k=k)
-
-        # lens_runs = []
-        # vis_list = []
-
-        # for index, value in zip(indices.tolist(), values.tolist()):
-        #     head = index // self.n_tokens
-        #     source = index % self.n_tokens
-
-        #     lens_runs.append(
-        #         (
-        #             ComponentLens(
-        #                 circuit_lens=self,
-        #                 component=CircuitComponent.ATTN_HEAD,
-        #                 run_data={
-        #                     "layer": layer,
-        #                     "head": head,
-        #                     "source_index": source,
-        #                     "feature": feature,
-        #                     "destination_index": seq_index,
-        #                 },
-        #             ),
-        #             value,
-        #         )
-        #     )
-
-        #     if visualize:
-        #         vis_list.append((head, source, seq_index, value))
-
-        # if visualize:
-        #     vis = einops.rearrange(
-        #         feature_act, "(n_head seq) -> n_head seq", n_head=self.model.cfg.n_heads
-        #     )
-
-        #     imshow(
-        #         vis,
-        #         x=[
-        #             f"{token}/{i}"
-        #             for (i, token) in enumerate(self.model.to_str_tokens(self.prompt))
-        #         ],
-        #         title=f"Layer {layer} Head/Seq Feature {feature} at '{self.get_str_token_at_seq(seq_index)}'::{seq_index}",
-        #         labels={"x": "Token", "y": "Head"},
-        #     )
-
-        #     pprint(
-        #         [
-        #             f"Head {head} "
-        #             + f"| Source: {self.model.tokenizer.decode([self.tokens[0, source]])}::{source} "
-        #             + f"| Destination: {self.model.tokenizer.decode([self.tokens[0, dest]])}::{dest} "
-        #             + f"| Contribution: {value * 100:.3g}%"
-        #             for (head, source, dest, value) in vis_list
-        #         ]
-        #     )
-
-        # return lens_runs
 
     def get_head_seq_lens_for_z_error(
         self, layer: int, seq_index: int, visualize=True, k=10

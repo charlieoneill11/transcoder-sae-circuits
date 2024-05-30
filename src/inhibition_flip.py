@@ -53,7 +53,7 @@ baba_dataset = gen_templated_prompts(
 )
 
 # %%
-N = 20
+N = 100
 
 data_type = "BABA"
 
@@ -66,8 +66,8 @@ steered_counter = 0
 if data_type == "ABBA":
     dataset = abba_dataset
 
-    abba_coeff = -5
-    baba_coeff = 10
+    abba_coeff = -10
+    baba_coeff = 15
 else:
     dataset = baba_dataset
     abba_coeff = 30

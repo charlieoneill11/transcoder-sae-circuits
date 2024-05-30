@@ -190,6 +190,28 @@ class SparseTranscoder(HookedRootModule):
         loss = mse_loss + l1_loss + mse_loss_ghost_resid
 
         return sae_out, feature_acts, loss, mse_loss, l1_loss, mse_loss_ghost_resid
+    
+    def encode(self, x):
+        # move x to correct dtype
+        x = x.to(self.dtype)
+        # Move x to cfg device
+        x = x.to(self.device)
+
+        sae_in = self.hook_sae_in(
+            x - self.b_dec
+        )  # Remove encoder bias as per Anthropic
+
+        hidden_pre = self.hook_hidden_pre(
+            einops.einsum(
+                sae_in,
+                self.W_enc,
+                "... d_in, d_in d_sae -> ... d_sae",
+            )
+            + self.b_enc
+        )
+        feature_acts = self.hook_hidden_post(torch.nn.functional.relu(hidden_pre))
+        return feature_acts
+
 
     def get_sparse_connection_loss(self):
         dots = self.spacon_sae_W_dec @ self.W_dec.T

@@ -1,6 +1,7 @@
 import torch
 import einops
 import circuitsvis as cv
+import plotly.express as px
 
 from typing import Union, Optional, List, Dict, Tuple, Set, Callable
 from circuit_lens import (
@@ -12,7 +13,7 @@ from circuit_lens import (
 from graphviz import Digraph
 from functools import partial
 from transformer_lens.hook_points import HookPoint
-from transformer_lens import ActivationCache
+from transformer_lens import ActivationCache, HookedTransformer
 from ranking_utils import visualize_top_tokens_for_seq
 from jaxtyping import Float
 from IPython.display import HTML
@@ -148,30 +149,78 @@ class TransformerAnalysisLayer(AnalysisObject):
         ]
 
 
+# class ComponentEdgeTracker:
+#     def __init__(self, transformer_model: "TransformerAnalysisModel"):
+#         self._reciever_to_contributors: Dict[Tuple, Set[Tuple]] = {}
+#         self._contributor_to_recievers: Dict[Tuple, Set[Tuple]] = {}
+
+#         self.transformer_model = transformer_model
+
+#     def add_edge(self, reciever: Tuple, contributor: Tuple):
+#         if reciever not in self._reciever_to_contributors:
+#             self._reciever_to_contributors[reciever] = set()
+#         if contributor not in self._contributor_to_recievers:
+#             self._contributor_to_recievers[contributor] = set()
+
+#         self._reciever_to_contributors[reciever].add(contributor)
+#         self._contributor_to_recievers[contributor].add(reciever)
+
+#     def remove_edge(self, reciever: Tuple, contributor: Tuple):
+#         if reciever in self._reciever_to_contributors:
+#             self._reciever_to_contributors[reciever].discard(contributor)
+#         if contributor in self._contributor_to_recievers:
+#             self._contributor_to_recievers[contributor].discard(reciever)
+
+#     def get_contributors(self, reciever: Tuple) -> List[Tuple]:
+#         return list(self._reciever_to_contributors.get(reciever, set()))
+
+#     def clear(self):
+#         self._reciever_to_contributors = {}
+#         self._contributor_to_recievers = {}
+
+
 class ComponentEdgeTracker:
     def __init__(self, transformer_model: "TransformerAnalysisModel"):
-        self._reciever_to_contributors: Dict[Tuple, Set[Tuple]] = {}
-        self._contributor_to_recievers: Dict[Tuple, Set[Tuple]] = {}
-
+        self._reciever_to_contributors: Dict[Tuple, Dict[Tuple, float]] = {}
+        self._contributor_to_recievers: Dict[Tuple, Dict[Tuple, float]] = {}
         self.transformer_model = transformer_model
 
-    def add_edge(self, reciever: Tuple, contributor: Tuple):
+    def add_edge(self, reciever: Tuple, contributor: Tuple, weight: float):
         if reciever not in self._reciever_to_contributors:
-            self._reciever_to_contributors[reciever] = set()
+            self._reciever_to_contributors[reciever] = {}
         if contributor not in self._contributor_to_recievers:
-            self._contributor_to_recievers[contributor] = set()
+            self._contributor_to_recievers[contributor] = {}
 
-        self._reciever_to_contributors[reciever].add(contributor)
-        self._contributor_to_recievers[contributor].add(reciever)
+        self._reciever_to_contributors[reciever][contributor] = weight
+        self._contributor_to_recievers[contributor][reciever] = weight
 
     def remove_edge(self, reciever: Tuple, contributor: Tuple):
         if reciever in self._reciever_to_contributors:
-            self._reciever_to_contributors[reciever].discard(contributor)
+            self._reciever_to_contributors[reciever].pop(contributor, None)
         if contributor in self._contributor_to_recievers:
-            self._contributor_to_recievers[contributor].discard(reciever)
+            self._contributor_to_recievers[contributor].pop(reciever, None)
 
     def get_contributors(self, reciever: Tuple) -> List[Tuple]:
-        return list(self._reciever_to_contributors.get(reciever, set()))
+        return list(self._reciever_to_contributors.get(reciever, {}).keys())
+
+    def get_contributors_with_weights(
+        self, reciever: Tuple
+    ) -> List[Tuple[Tuple, float]]:
+        return list(self._reciever_to_contributors.get(reciever, {}).items())
+
+    def get_total_contributions(self, component_type, layer, head):
+        incoming_contributions = 0
+        outgoing_contributions = 0
+
+        # for reciever, contributors in self._reciever_to_contributors.items():
+        #     if reciever[:3] == (component_type, layer, head):
+        #         incoming_contributions += sum(contributors.values())
+
+        for contributor, recievers in self._contributor_to_recievers.items():
+            if contributor[:3] == (component_type, layer, head):
+                outgoing_contributions += sum(recievers.values())
+
+        return incoming_contributions + outgoing_contributions
 
     def clear(self):
         self._reciever_to_contributors = {}
@@ -196,11 +245,11 @@ class TransformerAnalysisModel(AnalysisObject):
         self.edge_tracker = ComponentEdgeTracker(self)
 
     def add_contributor_edge(
-        self, reciever_id: Tuple, contributor_lens: ComponentLens
+        self, reciever_id: Tuple, contributor_lens: ComponentLens, weight: float
     ) -> "CircuitDiscoveryNode":
         contributor_node = self.get_discovery_node_at_locator(contributor_lens)
 
-        self.edge_tracker.add_edge(reciever_id, contributor_node.tuple_id)
+        self.edge_tracker.add_edge(reciever_id, contributor_node.tuple_id, weight)
 
         return contributor_node
 
@@ -224,12 +273,12 @@ class TransformerAnalysisModel(AnalysisObject):
     def get_discovery_node_at_locator(
         self, locator: Union[ComponentLens, Tuple]
     ) -> "CircuitDiscoveryNode":
-        if isinstance(locator, ComponentLens):
-            lens = locator
-            tuple_id: Tuple = lens.tuple_id
-        else:
+        if isinstance(locator, tuple):
             lens = None
             tuple_id: Tuple = locator
+        else:
+            lens = locator
+            tuple_id: Tuple = lens.tuple_id
 
         component = tuple_id[0]
 
@@ -381,6 +430,10 @@ class CircuitDiscoveryNode:
         return self.circuit_discovery.transformer_model
 
     @property
+    def feature(self):
+        return self.component_lens.run_data.get("feature", -1)
+
+    @property
     def k(self):
         return self.circuit_discovery.k
 
@@ -421,7 +474,7 @@ class CircuitDiscoveryRegularNode(CircuitDiscoveryNode):
 
     @property
     def seq_index(self):
-        return self.component_lens.run_data.get("seq_index", -1)
+        return int(self.component_lens.run_data.get("seq_index", -1))
 
     @property
     def top_k_contributors(self) -> List[ComponentLensWithValue]:
@@ -456,16 +509,24 @@ class CircuitDiscoveryRegularNode(CircuitDiscoveryNode):
         return self.transformer_model.get_contributors_in_graph(self.tuple_id)
 
     @property
+    def contributors_in_graph_with_weight(self):
+        contributors = self.contributors_in_graph
+
+        id_value = {node.tuple_id: value for (node, value) in self.top_k_contributors}
+
+        return [(node, id_value[node.tuple_id]) for node in contributors]
+
+    @property
     def sorted_contributors_in_graph(self) -> List["CircuitDiscoveryNode"]:
         id_value = {node.tuple_id: value for (node, value) in self.top_k_contributors}
 
         return sorted(self.contributors_in_graph, key=lambda x: -id_value[x.tuple_id])
 
     def add_contributor_edge(
-        self, component_lens: ComponentLens
+        self, component_lens: ComponentLens, weight: float
     ) -> "CircuitDiscoveryNode":
         return self.transformer_model.add_contributor_edge(
-            self.tuple_id, component_lens
+            self.tuple_id, component_lens, weight
         )
 
     def get_top_unused_contributors(self) -> List[ComponentLensWithValue]:
@@ -507,7 +568,7 @@ class CircuitDiscoveryHeadNode(CircuitDiscoveryNode):
 
     @property
     def source(self):
-        return self.component_lens.run_data["source_index"]
+        return int(self.component_lens.run_data["source_index"])
 
     @property
     def explored(self):
@@ -519,7 +580,7 @@ class CircuitDiscoveryHeadNode(CircuitDiscoveryNode):
 
     @property
     def dest(self):
-        return self.component_lens.run_data["destination_index"]
+        return int(self.component_lens.run_data["destination_index"])
 
     def _validate_head_type(self, head_type: str):
         assert head_type in ["q", "k", "v"]
@@ -555,6 +616,15 @@ class CircuitDiscoveryHeadNode(CircuitDiscoveryNode):
             self.tuple_id_for_head_type(head_type)
         )
 
+    def contributors_in_graph_with_weight(self, head_type: str):
+        contributors = self.contributors_in_graph(head_type)
+
+        id_value = {
+            node.tuple_id: value for (node, value) in self.top_k_contributors(head_type)
+        }
+
+        return [(node, id_value[node.tuple_id]) for node in contributors]
+
     def sorted_contributors_in_graph(self, head_type) -> List["CircuitDiscoveryNode"]:
         self._validate_head_type(head_type)
 
@@ -589,12 +659,12 @@ class CircuitDiscoveryHeadNode(CircuitDiscoveryNode):
         return tuple(list_id)
 
     def add_contributor_edge(
-        self, head_type: str, component_lens: ComponentLens
+        self, head_type: str, component_lens: ComponentLens, weight: float
     ) -> "CircuitDiscoveryNode":
         self._validate_head_type(head_type)
 
         return self.transformer_model.add_contributor_edge(
-            self.tuple_id_for_head_type(head_type), component_lens
+            self.tuple_id_for_head_type(head_type), component_lens, weight
         )
 
     @classmethod
@@ -650,10 +720,15 @@ class CircuitDiscovery:
         self.transformer_model = TransformerAnalysisModel(self)
 
         if token:
+            if isinstance(token, str):
+                token = int(self.model.to_single_token(token))
+
+            self.token = token
             self.root_node = self.transformer_model.get_discovery_node_at_locator(
                 ComponentLens.create_unembed_lens(self.lens, self.seq_index, token),
             )
         else:
+            self.token = None
             self.root_node = self.transformer_model.get_discovery_node_at_locator(
                 ComponentLens.create_unembed_at_token_lens(self.lens, self.seq_index),
             )
@@ -662,7 +737,15 @@ class CircuitDiscovery:
         if not no_graph_reset:
             self.reset_graph()
 
-        self.root_node = self.transformer_model.get_discovery_node_at_locator(tuple_id)
+        self.root_node = self.transformer_model.get_discovery_node_at_locator(
+            ComponentLens.init_from_tuple_id(tuple_id=tuple_id, circuit_lens=self.lens)
+        )
+
+    def set_root_to_z_feature(self, layer, seq_index, feature):
+        self.set_root((CircuitComponent.Z_FEATURE, layer, seq_index, feature))
+
+    def set_root_to_mlp_feature(self, layer, seq_index, feature):
+        self.set_root((CircuitComponent.MLP_FEATURE, layer, seq_index, feature))
 
     @property
     def model(self):
@@ -732,6 +815,182 @@ class CircuitDiscovery:
         self.traverse_graph(fn)
 
         return all_ids
+
+    def get_graph_edge_matrix(self, flatten=False, only_include_head_edges=False):
+        matrix_methods = EdgeMatrixMethods(self.model)
+
+        edge_matrix = matrix_methods.create_empty_edge_matrix()
+
+        def get_contrib_source_indices(contrib: CircuitDiscoveryRegularNode):
+            indices = []
+
+            if contrib.component == CircuitComponent.MLP_FEATURE:
+                if only_include_head_edges:
+                    for node in contrib.contributors_in_graph:
+                        if not isinstance(node, CircuitDiscoveryRegularNode):
+                            continue
+
+                        indices.extend(get_contrib_source_indices(node))
+                else:
+                    indices.append(matrix_methods.mlp_source_index(contrib.layer))
+            elif contrib.component in [
+                CircuitComponent.Z_FEATURE,
+                CircuitComponent.Z_SAE_ERROR,
+            ]:
+                for head in contrib.contributors_in_graph:
+                    if not isinstance(head, CircuitDiscoveryHeadNode):
+                        continue
+
+                    indices.append(
+                        matrix_methods.head_source_index(head.layer, head.head)
+                    )
+
+            return indices
+
+        def visit_fn(node: CircuitDiscoveryNode, edge_matrix):
+            if node.component not in [
+                CircuitComponent.ATTN_HEAD,
+                CircuitComponent.MLP_FEATURE,
+            ]:
+                return
+
+            if isinstance(node, CircuitDiscoveryRegularNode):
+                for contrib in node.contributors_in_graph:
+                    if not isinstance(contrib, CircuitDiscoveryRegularNode):
+                        continue
+
+                    source_indices = get_contrib_source_indices(contrib)
+
+                    edge_matrix[
+                        source_indices, matrix_methods.mlp_target_index(node.layer)
+                    ] = 1
+            elif isinstance(node, CircuitDiscoveryHeadNode):
+                for head_type in ["q", "k", "v"]:
+                    for contrib in node.contributors_in_graph(head_type):
+                        if not isinstance(contrib, CircuitDiscoveryRegularNode):
+                            continue
+
+                        source_indices = get_contrib_source_indices(contrib)
+
+                        edge_matrix[
+                            source_indices,
+                            matrix_methods.head_target_index(
+                                node.layer, node.head, head_type
+                            ),
+                        ] = 1
+
+        fn = partial(visit_fn, edge_matrix=edge_matrix)
+        self.traverse_graph(fn)
+
+        if flatten:
+            return einops.rearrange(edge_matrix, "s t -> (s t)")
+        else:
+            return edge_matrix
+
+    def get_token_pos_referenced_by_graph(self, no_bos=False) -> List[int]:
+        pos_set = set()
+
+        def visit(node, pos_set):
+            if not (
+                isinstance(node, CircuitDiscoveryRegularNode)
+                and node.component
+                in [CircuitComponent.EMBED, CircuitComponent.POS_EMBED]
+            ):
+                return
+
+            pos_set.add(node.seq_index)
+
+        fn = partial(visit, pos_set=pos_set)
+        self.traverse_graph(fn)
+
+        if no_bos:
+            pos_set.discard(0)
+
+        final = sorted(list(pos_set))
+
+        return final
+
+    def get_context_referenced_prompt(
+        self,
+        pos=None,
+        token_lr=("<<", ">>"),
+        context_lr=("[[", "]]"),
+        merge_nearby_context=False,
+    ):
+        tl, tr = token_lr
+        cl, cr = context_lr
+
+        if pos is None:
+            pos = self.seq_index
+
+        context_token_pos = self.get_token_pos_referenced_by_graph(no_bos=True)
+
+        str_tokens: List[str] = self.model.to_str_tokens(self.tokens)  # type: ignore
+
+        if pos in context_token_pos:
+            context_token_pos.remove(pos)
+
+        prompt = "".join(str_tokens[1 : pos + 1])
+
+        if not context_token_pos:
+            prompt_with_emphasis = (
+                "".join(str_tokens[1:pos]) + f"{tl}{str_tokens[pos]}{tr}"
+            )
+            return prompt, prompt_with_emphasis
+
+        if not merge_nearby_context:
+            prompt_with_context = ""
+
+            for i, tok in enumerate(str_tokens[:pos]):
+                if i == 0:
+                    continue
+
+                if i in context_token_pos:
+                    prompt_with_context += f"{cl}{tok}{cr}"
+                else:
+                    prompt_with_context += tok
+
+            prompt_with_context += f"{tl}{str_tokens[pos]}{tr}"
+
+            return prompt, prompt_with_context
+
+        token_ranges = []
+
+        i = 0
+
+        while i < len(self.tokens):
+            if i in context_token_pos:
+                range_start = i
+
+                k = i + 1
+
+                while k < len(self.tokens):
+                    if k in context_token_pos:
+                        k += 1
+                    else:
+                        break
+
+                token_ranges.append((range_start, k))
+                i = k
+            else:
+                i += 1
+
+        prompt_with_context = "".join(str_tokens[1 : token_ranges[0][0]])
+
+        for i, token_range in enumerate(token_ranges):
+            if i == len(token_ranges) - 1:
+                next_start = pos
+            else:
+                next_start = token_ranges[i + 1][0]
+
+            s, e = token_range
+
+            prompt_with_context += f"{cl}{''.join(str_tokens[s:e])}{cr}"
+            prompt_with_context += "".join(str_tokens[e:next_start])
+
+        prompt_with_context += f"{tl}{str_tokens[pos]}{tr}"
+
+        return prompt, prompt_with_context
 
     def all_nodes_in_graph(self):
         all_nodes = []
@@ -832,11 +1091,14 @@ class CircuitDiscovery:
 
         for contrib in top_contribs:
             reciever = contrib[2]
+            contribution_value = contrib[0]
 
             if isinstance(reciever, CircuitDiscoveryRegularNode):
-                node = reciever.add_contributor_edge(contrib[1])
+                node = reciever.add_contributor_edge(contrib[1], contribution_value)
             elif isinstance(reciever, CircuitDiscoveryHeadNode):
-                node = reciever.add_contributor_edge(contrib[3], contrib[1])
+                node = reciever.add_contributor_edge(
+                    contrib[3], contrib[1], contribution_value
+                )
 
             if not node.explored:
                 self.add_greedy_pass(root=node, minimal=True)
@@ -869,7 +1131,7 @@ class CircuitDiscovery:
                 total_contrib = 0
 
                 for child in top_contribs[:contributors_per_node]:
-                    child_discovery_node = node.add_contributor_edge(child[0])
+                    child_discovery_node = node.add_contributor_edge(child[0], child[1])
 
                     total_contrib += child[1]
 
@@ -878,7 +1140,6 @@ class CircuitDiscovery:
 
                     queue.append(child_discovery_node)
 
-                # print(node.tuple_id, f"Contrib: {total_contrib*100:.3g}%")
             elif isinstance(node, CircuitDiscoveryHeadNode):
                 for head_type in ["q", "k", "v"]:
                     top_contribs = node.get_top_unused_contributors(head_type)
@@ -889,7 +1150,7 @@ class CircuitDiscovery:
 
                     for child in top_contribs[:contributors_per_node]:
                         child_discovery_node = node.add_contributor_edge(
-                            head_type, child[0]
+                            head_type, child[0], child[1]
                         )
 
                         total_contrib += child[1]
@@ -920,6 +1181,23 @@ class CircuitDiscovery:
 
         return attn_heads
 
+    def mlps_tensor(self, visualize=False):
+        mlps = torch.zeros(12)
+
+        def track_included_heads_and_mlps(node: CircuitDiscoveryNode, mlps):
+            if isinstance(node, CircuitDiscoveryRegularNode):
+                if node.component == CircuitComponent.MLP_FEATURE:
+                    mlps[node.layer] = 1
+
+        fn = partial(track_included_heads_and_mlps, mlps=mlps)
+
+        self.traverse_graph(fn)
+
+        if visualize:
+            imshow(mlps, labels={"x": "Layer"})
+
+        return mlps
+
     def get_heads_and_mlps_in_graph(self) -> Tuple[List[List[int]], List[int]]:
         attn_heads_set = set()
         mlps = set()
@@ -948,6 +1226,15 @@ class CircuitDiscovery:
             attn_heads[layer].append(head)
 
         return attn_heads, mlps
+
+    def are_heads_above_layer(self, layer: int):
+        attn_heads, _ = self.get_heads_and_mlps_in_graph()
+
+        for layer_heads in attn_heads[layer:]:
+            if layer_heads:
+                return True
+
+        return False
 
     def get_heads_and_mlps_in_graph_at_seq(
         self,
@@ -1030,9 +1317,15 @@ class CircuitDiscovery:
             all_patterns, dim=0
         )
 
+        min_pos, max_pos = self.get_min_max_pos_in_graph()
+
+        patterns = patterns[:, min_pos : max_pos + 1, min_pos : max_pos + 1]
+
         # Circuitsvis Plot (note we get the code version so we can concatenate with the title)
         plot = cv.attention.attention_heads(
-            attention=patterns, tokens=self.str_tokens, attention_head_names=labels
+            attention=patterns,
+            tokens=self.str_tokens[min_pos : max_pos + 1],
+            attention_head_names=labels,
         ).show_code()
 
         # Display the title
@@ -1286,6 +1579,25 @@ class CircuitDiscovery:
 
         return features_at_heads
 
+    def get_features_at_mlps_in_graph(self):
+        features_at_mlps = [set() for _ in range(self.model.cfg.n_layers)]
+
+        def visit_fn(node: CircuitDiscoveryNode, features_at_mlps: List[Set]):
+            if not isinstance(node, CircuitDiscoveryRegularNode):
+                return
+
+            if node.component == CircuitComponent.MLP_FEATURE:
+                layer = node.layer
+                feature = node.component_lens.run_data["feature"]
+
+                features_at_mlps[layer].add(feature)
+
+        fn = partial(visit_fn, features_at_mlps=features_at_mlps)
+
+        self.traverse_graph(fn)
+
+        return features_at_mlps
+
     def component_lens_at_loc(self, loc: List):
         node: CircuitDiscoveryNode = self.root_node
         head_type = "q"
@@ -1348,18 +1660,67 @@ class CircuitDiscovery:
         elif isinstance(node, CircuitDiscoveryHeadNode):
             node.lens(head_type)
 
-    def visualize_graph(self, begin_layer=0):
+    def get_min_max_pos_in_graph(self):
+        min_max = {"min": 10**4, "max": 0}
+
+        def visit(node: CircuitDiscoveryNode, min_max):
+            if isinstance(node, CircuitDiscoveryRegularNode):
+                if node.seq_index == 0:
+                    return
+
+                if node.seq_index < min_max["min"]:
+                    min_max["min"] = node.seq_index
+
+                if node.seq_index > min_max["max"]:
+                    min_max["max"] = node.seq_index
+
+            elif isinstance(node, CircuitDiscoveryHeadNode):
+                for pos in [node.source, node.dest]:
+                    if pos == 0:
+                        continue
+
+                    if pos < min_max["min"]:
+                        min_max["min"] = pos
+
+                    if pos > min_max["max"]:
+                        min_max["max"] = pos
+
+        fn = partial(visit, min_max=min_max)
+        self.traverse_graph(fn)
+
+        return (min_max["min"], min_max["max"])
+
+    def visualize_graph(self, begin_layer=-1, cutoff_tokens_at_min_max=True):
         G = Digraph()
         G.graph_attr.update(rankdir="BT", newrank="true")
         G.node_attr.update(
             shape="box", style="rounded", fontsize="10pt", margin="0.01,0.01"
         )
         G.attr(nodesep="0.1")
-        # G.attr(fontsize="12pt")
-        #    , size="10,10")
 
         layers = [dict() for _ in range(self.model.cfg.n_layers)]
         embed = dict()
+
+        def edge_color(opacity: float, color: str = "black"):
+            opacity = min(1.0, max(0.0, opacity))
+            start = 0.1
+
+            opacity = start + (1 - start) * opacity
+
+            R = 1 - opacity
+            B = 1 - opacity
+            G = 1 - opacity
+
+            if color == "red":
+                R = 1
+            elif color == "green":
+                G = 1
+            elif color == "blue":
+                B = 1
+
+            return "#{:02x}{:02x}{:02x}".format(
+                int(R * 255), int(G * 255), int(B * 255)
+            )
 
         def node_id(tuple_id):
             if tuple_id != CircuitComponent.ATTN_HEAD:
@@ -1392,16 +1753,26 @@ class CircuitDiscovery:
         def embed_id(seq_index):
             return str((CircuitComponent.EMBED, 0, seq_index, -1))
 
-        if begin_layer <= 0:
-            with G.subgraph(name="words") as subgraph:
+        min_pos, max_pos = self.get_min_max_pos_in_graph()
+        max_pos += 1
+
+        if begin_layer < 0:
+            with G.subgraph(name="words") as subgraph:  # type: ignore
                 subgraph.attr(rank="same")
                 for i, str_token in enumerate(self.str_tokens):
+                    if cutoff_tokens_at_min_max and (i < min_pos or i > max_pos):
+                        continue
+
                     subgraph.node(
                         embed_id(i),
-                        label=str_token,
+                        label=str_token + f"\n{i}",
                     )
 
-                    if i:
+                    min_cutoff = 0
+                    if cutoff_tokens_at_min_max:
+                        min_cutoff = min_pos
+
+                    if i > min_cutoff:
                         subgraph.edge(
                             embed_id(i - 1), embed_id(i), style="invis", minlen=".1"
                         )
@@ -1409,7 +1780,7 @@ class CircuitDiscovery:
             pos_embeds = list(embed.get(CircuitComponent.POS_EMBED, set()))
 
             if pos_embeds:
-                with G.subgraph() as subgraph:
+                with G.subgraph() as subgraph:  # type: ignore
                     subgraph.attr(rank="same")
                     for pos_embed in pos_embeds:
                         seq_index = pos_embed[2]
@@ -1425,7 +1796,7 @@ class CircuitDiscovery:
         unembeds_at_token = list(embed.get(CircuitComponent.UNEMBED_AT_TOKEN, set()))
 
         if unembeds_at_token:
-            with G.subgraph(name="unembed") as subgraph:
+            with G.subgraph(name="unembed") as subgraph:  # type: ignore
                 subgraph.attr(rank="same")
                 for unembed in unembeds_at_token:
                     seq_index = unembed[1]
@@ -1438,7 +1809,7 @@ class CircuitDiscovery:
         unembeds = list(embed.get(CircuitComponent.UNEMBED, set()))
 
         if unembeds:
-            with G.subgraph(name="unembed") as subgraph:
+            with G.subgraph(name="unembed") as subgraph:  # type: ignore
                 subgraph.attr(rank="same")
                 for unembed in unembeds:
                     _, seq_index, token_i = unembed
@@ -1472,7 +1843,7 @@ class CircuitDiscovery:
             head_ids = list(layers[layer].get(CircuitComponent.ATTN_HEAD, set()))
 
             if head_ids:
-                with G.subgraph() as subgraph:
+                with G.subgraph() as subgraph:  # type: ignore
                     subgraph.attr(rank="same")
 
                     for head_id in head_ids:
@@ -1497,7 +1868,7 @@ class CircuitDiscovery:
                 if not comp_ids:
                     continue
 
-                with G.subgraph() as subgraph:
+                with G.subgraph() as subgraph:  # type: ignore
                     subgraph.attr(rank="same")
 
                     for comp_id in comp_ids:
@@ -1522,7 +1893,7 @@ class CircuitDiscovery:
                     return
 
                 for head_type in ["q", "k", "v"]:
-                    contributors = node.contributors_in_graph(head_type)
+                    contributors = node.contributors_in_graph_with_weight(head_type)
 
                     if head_type == "q":
                         color = "blue"
@@ -1531,14 +1902,16 @@ class CircuitDiscovery:
                     elif head_type == "v":
                         color = "red"
 
-                    for contributor in contributors:
+                    for contributor, weight in contributors:
                         if contributor.layer < begin_layer:
                             continue
 
                         G.edge(
                             node_id(contributor.tuple_id),
                             node_id(node.tuple_id),
-                            color=color,
+                            color=edge_color(opacity=weight, color=color),
+                            label=f"{weight*100:.3g}%",
+                            fontsize="8pt",
                         )
 
             if isinstance(node, CircuitDiscoveryRegularNode):
@@ -1548,13 +1921,244 @@ class CircuitDiscovery:
                 ]:
                     return
 
-                for contributor in node.contributors_in_graph:
+                for contributor, weight in node.contributors_in_graph_with_weight:
                     if contributor.layer < begin_layer:
                         continue
-                    G.edge(node_id(contributor.tuple_id), node_id(node.tuple_id))
+                    G.edge(
+                        node_id(contributor.tuple_id),
+                        node_id(node.tuple_id),
+                        color=edge_color(opacity=weight),
+                        label=f"{weight*100:.3g}%",
+                        fontsize="8pt",
+                    )
 
         fn = partial(add_edges, G=G)
 
         self.traverse_graph(fn)
 
         return G
+
+    def add_directed_edges_with_weights(self, root_node, contributors_per_node=1):
+        queue = [root_node]
+        visited_ids = set()
+
+        while queue:
+            node = queue.pop(0)
+            if node.tuple_id in visited_ids:
+                continue
+
+            visited_ids.add(node.tuple_id)
+
+            if isinstance(node, CircuitDiscoveryRegularNode):
+                top_contribs = node.get_top_unused_contributors()
+                for contributor, value in top_contribs[:contributors_per_node]:
+                    print(
+                        f"Node: {node.tuple_id}, Contributor: {contributor}, Value: {value}"
+                    )
+                    contributor_node = node.add_contributor_edge(contributor, value)
+                    self.transformer_model.edge_tracker.add_edge(
+                        node.tuple_id, contributor_node.tuple_id, weight=value
+                    )
+                    queue.append(contributor_node)
+
+            elif isinstance(node, CircuitDiscoveryHeadNode):
+                for head_type in ["q", "k", "v"]:
+                    top_contribs = node.get_top_unused_contributors(head_type)
+                    for contributor, value in top_contribs[:contributors_per_node]:
+                        print(
+                            f"Node: {node.tuple_id}, Head Type: {head_type}, Contributor: {contributor}, Value: {value}"
+                        )
+                        contributor_node = node.add_contributor_edge(
+                            head_type, contributor, value
+                        )
+                        self.transformer_model.edge_tracker.add_edge(
+                            node.tuple_id, contributor_node.tuple_id, weight=value
+                        )
+                        queue.append(contributor_node)
+
+    def recursive_explore_all_nodes(self, root_node, contributors_per_node=1):
+        """
+        Recursively explore all nodes and add edges for each node.
+        """
+        visited_ids = set()
+
+        def explore_node(node):
+            if node.tuple_id in visited_ids:
+                return
+
+            visited_ids.add(node.tuple_id)
+            self.add_directed_edges_with_weights(node, contributors_per_node)
+
+            if isinstance(node, CircuitDiscoveryRegularNode):
+                for contributor_node in node.contributors_in_graph:
+                    explore_node(contributor_node)
+
+            elif isinstance(node, CircuitDiscoveryHeadNode):
+                for head_type in ["q", "k", "v"]:
+                    for contributor_node in node.contributors_in_graph(head_type):
+                        explore_node(contributor_node)
+
+        explore_node(root_node)
+
+    def build_directed_graph(self, contributors_per_node=1):
+        """
+        Build the entire directed graph by exploring all nodes from the root.
+        """
+        self.reset_graph()
+        self.recursive_explore_all_nodes(self.root_node, contributors_per_node)
+
+
+class EdgeMatrixMethods:
+    def __init__(self, model: HookedTransformer):
+        self.model = model
+
+        self.num_head_sources = self.model.cfg.n_heads * (self.model.cfg.n_layers)
+        self.num_mlp_sources = self.model.cfg.n_layers - 1
+
+        self.num_head_targets = (
+            3 * self.model.cfg.n_heads * (self.model.cfg.n_layers - 1)
+        )
+        self.num_mlp_targets = self.model.cfg.n_layers
+
+    def create_empty_edge_matrix(self):
+        return torch.zeros(
+            self.num_head_sources + self.num_mlp_sources,
+            self.num_head_targets + self.num_mlp_targets,
+        )
+
+    def head_source_index(self, layer: int, head: int):
+        return (layer * self.model.cfg.n_heads) + head
+
+    def mlp_source_index(self, layer: int):
+        return self.num_head_sources + layer
+
+    def head_target_index(self, layer: int, head: int, head_type: str):
+        if head_type == "q":
+            type_i = 0
+        elif head_type == "k":
+            type_i = 1
+        elif head_type == "v":
+            type_i = 2
+
+        # Head 0 isn't a target
+        return ((layer - 1) * self.model.cfg.n_heads * 3) + (head * 3) + type_i
+
+    def mlp_target_index(self, layer: int):
+        return self.num_head_targets + layer
+
+
+class EdgeMatrixAnalyzer:
+    def __init__(self, methods: EdgeMatrixMethods, graph_matrices, seq_pos):
+        self.methods = methods
+        self.model = methods.model
+
+        self.graph_matrices = graph_matrices
+        self.graph_matrix_total = graph_matrices.sum(dim=0)
+
+        self.seq_pos = seq_pos
+
+    def get_source_labels(self):
+        labels = []
+
+        for layer in range(self.model.cfg.n_layers):
+            for head in range(self.model.cfg.n_heads):
+                labels.append(f"L{layer}H{head}")
+
+        for layer in range(self.model.cfg.n_layers - 1):
+            labels.append(f"L{layer}MLP")
+
+        return labels
+
+    def get_target_labels(self):
+        labels = []
+
+        for layer in range(1, self.model.cfg.n_layers):
+            for head in range(self.model.cfg.n_heads):
+                labels.append(f"L{layer}H{head}Q")
+                labels.append(f"L{layer}H{head}K")
+                labels.append(f"L{layer}H{head}V")
+
+        for layer in range(self.model.cfg.n_layers):
+            labels.append(f"L{layer}MLP")
+
+        return labels
+
+    def imshow_totals(self, no_clip=False, zmax=None):
+        if zmax is None:
+            zmax = 20
+            zmin = -20
+        else:
+            zmin = -zmax
+
+        if no_clip:
+            zmax = None
+            zmin = None
+
+        imshow(
+            self.graph_matrix_total,
+            x=self.get_target_labels(),
+            y=self.get_source_labels(),
+            zmax=zmax,
+            zmin=zmin,
+            labels={"x": "Target", "y": "Source"},
+        )
+
+    def get_matrices_given_source_dest(self, source_dest_list):
+        gm = self.graph_matrices
+        sp = self.seq_pos
+
+        for source, dest in source_dest_list:
+            indices = (
+                gm[
+                    :,
+                    self.methods.head_source_index(*source),
+                    self.methods.head_target_index(*dest),
+                ]
+                .nonzero()
+                .squeeze()
+            )
+
+            gm = gm[indices]
+            sp = sp[indices]
+
+        return gm, sp
+
+    def get_top_head_connections(self, layer_thresh=1, k=100, source_dest_list=[]):
+        source_labels = self.get_source_labels()
+        target_labels = self.get_target_labels()
+
+        gm, _ = self.get_matrices_given_source_dest(source_dest_list)
+
+        # gm = self.graph_matrices
+
+        # for source, dest in source_dest_list:
+        #     indices = (
+        #         gm[
+        #             :,
+        #             self.methods.head_source_index(*source),
+        #             self.methods.head_target_index(*dest),
+        #         ]
+        #         .nonzero()
+        #         .squeeze()
+        #     )
+
+        #     gm = gm[indices.int()]
+
+        gm = gm.sum(dim=0)
+
+        total = gm[: self.methods.num_head_sources, : self.methods.num_head_targets]
+
+        total[: layer_thresh * self.model.cfg.n_heads, :] = 0
+
+        top_vals, top_indices = torch.topk(total.flatten(), k=k)
+        top_indices = torch.stack(torch.unravel_index(top_indices, total.shape)).T
+
+        top_list = []
+        for v, source_target in zip(top_vals, top_indices):
+            print(source_target)
+            source, target = source_target
+            source, target = source, target
+
+            top_list.append((source_labels[source], target_labels[target], v))
+
+        return top_list

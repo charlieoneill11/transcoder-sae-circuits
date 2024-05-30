@@ -21,6 +21,7 @@ def get_attn_head_roc(
             y=tp,
             title=f"ROC Curve for {task_name} " + additional_title,
             labels={"x": "False Positive Rate", "y": "True Positive Rate"},
+            width=600
         ).show()
 
     return (

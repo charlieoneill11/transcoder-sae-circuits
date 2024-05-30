@@ -4,6 +4,7 @@ import random
 from transformer_lens import HookedTransformer
 from data.eval_dataset import EvalItem
 from typing import List
+from load_model_and_encoders import get_model
 
 
 GT_GROUND_TRUTH_DATA = torch.load("data/gt_ground_truth.pt")
@@ -51,7 +52,7 @@ SINGLE_TOKEN_NOUNS = [
     "work",
 ]
 
-model = HookedTransformer.from_pretrained("gpt2-small")
+model = get_model(torch.device("cuda" if torch.cuda.is_available() else "cpu"))
 
 
 def generate_greater_than_sentence(noun: str, year: int):

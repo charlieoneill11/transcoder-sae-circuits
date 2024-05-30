@@ -31,7 +31,7 @@ torchinfo
 torchvision
 frozendict
 graphviz
-openai==0.28
+openai
 transformer_lens==1.17.0
 autorom[accept-rom-license]
 ale-py

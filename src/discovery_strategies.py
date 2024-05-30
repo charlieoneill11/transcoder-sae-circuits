@@ -30,6 +30,9 @@ def create_filter(remove_comps=[], add_comps=[], no_sae_error=False):
     return filter
 
 
+BASIC_FILTER = create_filter()
+
+
 def create_simple_greedy_strategy(
     passes=5,
     node_contributors=1,
@@ -53,6 +56,9 @@ def create_simple_greedy_strategy(
                     )
 
     return strategy
+
+
+BASIC_STRATEGY = create_simple_greedy_strategy()
 
 
 def create_top_contributor_strategy(

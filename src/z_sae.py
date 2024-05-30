@@ -70,6 +70,12 @@ class ZSAE(nn.Module):
             loss = l2_loss + l1_loss  # []
         return loss, x_reconstruct, acts, l2_loss, l1_loss
 
+    def encode(self, x):
+        x = x.to(self.device)
+        x_cent = x - self.b_dec
+        acts = F.relu(x_cent @ self.W_enc + self.b_enc)
+        return acts
+
     @classmethod
     def load_from_hf(cls, version, hf_repo="ckkissane/tinystories-1M-SAES"):
         """
