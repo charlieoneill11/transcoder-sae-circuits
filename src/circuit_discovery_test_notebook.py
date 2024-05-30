@@ -85,6 +85,6 @@ cd.visualize_graph()
 
 cd.visualize_attn_heads_in_graph()
 
-
-
-
+# %%
+## Show the component lens attributions recursively from the root
+cd.component_lens_at_loc([0, 1])

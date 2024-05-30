@@ -1,5 +1,4 @@
 # %%
-
 %load_ext autoreload
 %autoreload 2
 
@@ -36,7 +35,6 @@ dataset_prompts = gen_templated_prompts(template_idex=1, N=500)
 
 
 # %%
-
 def component_filter(component: str):
     return component in [
         CircuitComponent.Z_FEATURE,
@@ -93,6 +91,10 @@ def strategy(cd: CircuitDiscovery):
 
 
 task_eval = TaskEvaluation(prompts=dataset_prompts, circuit_discovery_strategy=strategy, allowed_components_filter=component_filter)
+
+# %%
+task_eval.get_attn_head_freqs_over_dataset(30, return_freqs=False, additional_title="(IOI)")
+
 
 # %%
 cd = CircuitDiscovery(

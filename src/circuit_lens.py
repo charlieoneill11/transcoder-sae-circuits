@@ -891,7 +891,7 @@ class CircuitLens:
                     f"{token}/{i}"
                     for (i, token) in enumerate(self.model.to_str_tokens(self.prompt))
                 ],
-                title=f"Layer {layer} Head/Seq {f'Feature {feature}' if feature >= 0 else 'Z Error'} at '{self.get_str_token_at_seq(seq_index)}'::{seq_index}",
+                title=f"Layer {layer} Z {f'Feature {feature}' if feature >= 0 else 'Error'} at '{self.get_str_token_at_seq(seq_index)}'/{seq_index}",
                 labels={"x": "Token", "y": "Head"},
             )
 
