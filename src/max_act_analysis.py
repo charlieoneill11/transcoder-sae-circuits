@@ -239,7 +239,10 @@ class MaxActAnalysis:
                     names_filter=name_filter,
                 )
                 acts = cache[name_filter]
-                acts_flat = einops.rearrange(acts, "b pos n d -> (b pos) (n d)")
+                if self.feature_type == "attn":
+                    acts_flat = einops.rearrange(acts, "b pos n d -> (b pos) (n d)")
+                else:
+                    acts_flat = einops.rearrange(acts, "b pos d -> (b pos) d")
 
                 hidden_acts = self.encoder.encode(acts_flat)
                 curr_scores = hidden_acts[:, self.feature]

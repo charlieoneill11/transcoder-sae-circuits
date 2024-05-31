@@ -126,7 +126,7 @@ def generate_greater_than_dataset(N=10, counter_minus=10) -> List[EvalItem]:
     counter_toks = [str(max(0, (year % 100) - counter_minus)) for year in years]
 
     return [
-        {"text": prompt, "correct": correct, "counter": counter}
+        {"text": prompt.split('<|endoftext|>')[-1], "correct": correct, "counter": counter}
         for prompt, correct, counter in zip(str_prompts, correct_toks, counter_toks)
     ]
 

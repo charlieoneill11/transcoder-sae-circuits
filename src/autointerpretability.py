@@ -633,7 +633,14 @@ def get_interpretation(examples_clean_text, top_tokens):
 
 def get_circuit_prediction(task: str = 'ioi', N: int = 50):
     torch.set_grad_enabled(False)
-    dataset_prompts = gen_templated_prompts(template_idex=1, N=500)
+    if task == 'ioi':
+        dataset_prompts = gen_templated_prompts(template_idex=1, N=500)
+    elif task == 'gt':
+        dataset_prompts = generate_greater_than_dataset(N=500)
+        # Print the first prompt
+        print(dataset_prompts[0]['text'])
+    else:
+        raise ValueError(f"Invalid task: {task}")
 
     def component_filter(component: str):
         return component in [
